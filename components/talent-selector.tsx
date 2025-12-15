@@ -22,8 +22,22 @@ import {
   FileSpreadsheet,
   AlertCircle,
   CheckCircle,
+  Loader2,
 } from "lucide-react"
-import { useState, useCallback, useRef } from "react"
+import { useState, useCallback, useRef, useEffect } from "react"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { TalentProfileModal } from "./talent-profile-modal"
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qaqyqok7j0.execute-api.us-east-1.amazonaws.com'
 
 export interface UploadedFile {
   id: string
@@ -35,6 +49,7 @@ export interface UploadedFile {
   url?: string
   error?: string
   talentId?: string
+  fileKey?: string
 }
 
 export interface TalentProfile {
@@ -47,7 +62,7 @@ export interface TalentProfile {
     engagement: number
     deals: number
   }
-  status: "active" | "inactive"
+  status: "active" | "inactive" | string
 }
 
 interface TalentSelectorProps {
@@ -56,41 +71,22 @@ interface TalentSelectorProps {
   onCreateNew: () => void
   onStartDiscovery?: () => void
   isDiscovering?: boolean
+  onFilesChange?: (files: UploadedFile[]) => void
 }
 
 const ACCEPTED_TYPES = {
   "application/pdf": [".pdf"],
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
   "application/vnd.ms-excel": [".xls"],
+  "application/msword": [".doc"],
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
+  "text/plain": [".txt"],
+  "text/csv": [".csv"],
   "image/*": [".jpg", ".jpeg", ".png", ".gif", ".webp"],
   "video/*": [".mp4", ".mov", ".avi", ".mkv"],
 }
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB
-
-const mockTalents: TalentProfile[] = [
-  {
-    id: "talent-1",
-    name: "John Doe",
-    category: "Professional Athlete",
-    stats: { followers: 125000, engagement: 4.2, deals: 8 },
-    status: "active",
-  },
-  {
-    id: "talent-2",
-    name: "Sarah Johnson",
-    category: "Fitness Influencer",
-    stats: { followers: 89000, engagement: 6.1, deals: 12 },
-    status: "active",
-  },
-  {
-    id: "talent-3",
-    name: "Mike Chen",
-    category: "Gaming Creator",
-    stats: { followers: 234000, engagement: 3.8, deals: 5 },
-    status: "active",
-  },
-]
 
 export function TalentSelector({
   selectedTalent,
@@ -98,11 +94,57 @@ export function TalentSelector({
   onCreateNew,
   onStartDiscovery,
   isDiscovering,
+  onFilesChange,
 }: TalentSelectorProps) {
+  const [talents, setTalents] = useState<TalentProfile[]>([])
+  const [isLoading, setIsLoading] = useState(true)
   const [isCreating, setIsCreating] = useState(false)
+  const [showCreateDialog, setShowCreateDialog] = useState(false)
+  const [newTalentName, setNewTalentName] = useState("")
+  const [newTalentCategory, setNewTalentCategory] = useState("Creator")
   const [files, setFiles] = useState<UploadedFile[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
+  const [showProfileModal, setShowProfileModal] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const originalFilesRef = useRef<Map<string, File>>(new Map())
+
+  // Load talents from API on mount
+  useEffect(() => {
+    loadTalents()
+  }, [])
+
+  // Notify parent of file changes
+  useEffect(() => {
+    onFilesChange?.(files)
+  }, [files, onFilesChange])
+
+  const loadTalents = async () => {
+    setIsLoading(true)
+    try {
+      const response = await fetch(`${API_URL}/api/talents`)
+      if (response.ok) {
+        const data = await response.json()
+        // Map API response to component interface
+        const mappedTalents = (data.talents || []).map((t: any) => ({
+          id: t.id,
+          name: t.name,
+          category: t.category,
+          avatar: t.avatar,
+          stats: {
+            followers: t.stats?.followers || 0,
+            engagement: t.stats?.engagement || 0,
+            deals: t.stats?.deals || 0,
+          },
+          status: t.status || 'active',
+        }))
+        setTalents(mappedTalents)
+      }
+    } catch (error) {
+      console.error('Failed to load talents:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   const formatNumber = (num: number) => {
     if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`
@@ -111,26 +153,74 @@ export function TalentSelector({
   }
 
   const handleTalentSelect = (talentId: string) => {
-    const talent = mockTalents.find((t) => t.id === talentId)
+    const talent = talents.find((t) => t.id === talentId)
     if (talent) {
       onTalentChange(talent)
+      setFiles([]) // Clear files when switching talents
     }
   }
 
   const handleCreateNew = () => {
+    setShowCreateDialog(true)
+  }
+
+  const handleTalentDeleted = () => {
+    // Refresh the list and clear selection
+    loadTalents()
+    onTalentChange(undefined as any)
+    setFiles([])
+  }
+
+  const handleOpenProfile = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    console.log('Opening profile modal for:', selectedTalent?.name)
+    if (selectedTalent) {
+      setShowProfileModal(true)
+    }
+  }
+
+  const handleCreateTalent = async () => {
+    if (!newTalentName.trim()) return
+
     setIsCreating(true)
-    // Simulate creating new talent profile
-    setTimeout(() => {
-      const newTalent: TalentProfile = {
-        id: `talent-${Date.now()}`,
-        name: "New Talent",
-        category: "Uncategorized",
-        stats: { followers: 0, engagement: 0, deals: 0 },
-        status: "active",
+    try {
+      const response = await fetch(`${API_URL}/api/talents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newTalentName.trim(),
+          category: newTalentCategory,
+        })
+      })
+
+      if (response.ok) {
+        const newTalent = await response.json()
+        // Map to component interface
+        const mappedTalent: TalentProfile = {
+          id: newTalent.id,
+          name: newTalent.name,
+          category: newTalent.category,
+          avatar: newTalent.avatar,
+          stats: {
+            followers: newTalent.stats?.followers || 0,
+            engagement: newTalent.stats?.engagement || 0,
+            deals: newTalent.stats?.deals || 0,
+          },
+          status: newTalent.status || 'active',
+        }
+        setTalents(prev => [...prev, mappedTalent])
+        onTalentChange(mappedTalent)
+        setShowCreateDialog(false)
+        setNewTalentName("")
+        setNewTalentCategory("Creator")
+      } else {
+        console.error('Failed to create talent')
       }
-      onTalentChange(newTalent)
+    } catch (error) {
+      console.error('Failed to create talent:', error)
+    } finally {
       setIsCreating(false)
-    }, 1000)
+    }
   }
 
   const getFileIcon = (type: string) => {
@@ -169,47 +259,95 @@ export function TalentSelector({
     return null
   }
 
-  const simulateUpload = async (file: UploadedFile): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      let progress = 0
-      const interval = setInterval(() => {
-        progress += Math.random() * 15
-        if (progress >= 100) {
-          progress = 100
-          clearInterval(interval)
+  const uploadToS3 = async (uploadFile: UploadedFile, originalFile: File): Promise<void> => {
+    if (!selectedTalent) return
 
-          if (Math.random() < 0.1) {
-            setFiles((prev) =>
+    try {
+      // 1. Get presigned URL from backend
+      const presignedResponse = await fetch(`${API_URL}/api/talents/${selectedTalent.id}/docs/upload-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: uploadFile.name,
+          content_type: uploadFile.type || 'application/octet-stream',
+        })
+      })
+
+      if (!presignedResponse.ok) {
+        throw new Error('Failed to get upload URL')
+      }
+
+      const presignedData = await presignedResponse.json()
+
+      // 2. Upload file directly to S3 using presigned POST
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+
+        xhr.upload.addEventListener('progress', (event) => {
+          if (event.lengthComputable) {
+            const progress = (event.loaded / event.total) * 100
+            setFiles(prev => prev.map((f) => (f.id === uploadFile.id ? { ...f, progress } : f)))
+          }
+        })
+
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            setFiles(prev =>
               prev.map((f) =>
-                f.id === file.id ? { ...f, status: "error", error: "Upload failed. Please try again." } : f,
-              ),
-            )
-            reject(new Error("Upload failed"))
-          } else {
-            setFiles((prev) =>
-              prev.map((f) =>
-                f.id === file.id
-                  ? { ...f, status: "completed", progress: 100, url: `https://mock-s3.com/${f.name}` }
+                f.id === uploadFile.id
+                  ? {
+                      ...f,
+                      status: "completed" as const,
+                      progress: 100,
+                      url: presignedData.public_url,
+                      fileKey: presignedData.file_key
+                    }
                   : f,
               ),
             )
             resolve()
+          } else {
+            reject(new Error(`Upload failed with status ${xhr.status}`))
           }
-        } else {
-          setFiles((prev) => prev.map((f) => (f.id === file.id ? { ...f, progress } : f)))
-        }
-      }, 200)
-    })
+        })
+
+        xhr.addEventListener('error', () => {
+          reject(new Error('Upload failed'))
+        })
+
+        const formData = new FormData()
+        Object.entries(presignedData.fields).forEach(([key, value]) => {
+          formData.append(key, value as string)
+        })
+        formData.append('file', originalFile)
+
+        xhr.open('POST', presignedData.upload_url)
+        xhr.send(formData)
+      })
+    } catch (error) {
+      setFiles(prev =>
+        prev.map((f) =>
+          f.id === uploadFile.id
+            ? { ...f, status: "error" as const, error: error instanceof Error ? error.message : "Upload failed" }
+            : f,
+        ),
+      )
+      throw error
+    }
   }
 
   const handleFiles = useCallback(
     async (fileList: FileList) => {
-      const newFiles: UploadedFile[] = []
+      if (!selectedTalent) return
 
-      Array.from(fileList).forEach((file) => {
+      const newFiles: UploadedFile[] = []
+      const fileArray = Array.from(fileList)
+
+      fileArray.forEach((file) => {
         const error = validateFile(file)
+        const fileId = `file-${Date.now()}-${Math.random()}`
         const uploadFile: UploadedFile = {
-          id: `file-${Date.now()}-${Math.random()}`,
+          id: fileId,
           name: file.name,
           size: file.size,
           type: file.type,
@@ -219,18 +357,22 @@ export function TalentSelector({
           talentId: selectedTalent?.id,
         }
         newFiles.push(uploadFile)
+        if (!error) {
+          originalFilesRef.current.set(fileId, file)
+        }
       })
 
-      const updatedFiles = [...files, ...newFiles]
-      setFiles(updatedFiles)
+      setFiles(prev => [...prev, ...newFiles])
 
-      newFiles
-        .filter((file) => !file.error)
-        .forEach((file) => {
-          simulateUpload(file).catch(console.error)
-        })
+      // Start uploads for valid files
+      for (const uploadFile of newFiles.filter((f) => !f.error)) {
+        const originalFile = originalFilesRef.current.get(uploadFile.id)
+        if (originalFile) {
+          uploadToS3(uploadFile, originalFile).catch(console.error)
+        }
+      }
     },
-    [files, selectedTalent?.id],
+    [selectedTalent],
   )
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -270,17 +412,32 @@ export function TalentSelector({
     [handleFiles],
   )
 
-  const removeFile = useCallback((fileId: string) => {
+  const removeFile = useCallback(async (fileId: string) => {
+    const file = files.find((f) => f.id === fileId)
+
+    // If file was uploaded to S3, delete it
+    if (file?.fileKey && file.status === "completed" && selectedTalent) {
+      try {
+        await fetch(`${API_URL}/api/talents/${selectedTalent.id}/docs/${encodeURIComponent(file.fileKey)}`, {
+          method: 'DELETE'
+        })
+      } catch (error) {
+        console.error('Failed to delete file from S3:', error)
+      }
+    }
+
     setFiles((prev) => prev.filter((f) => f.id !== fileId))
-  }, [])
+    originalFilesRef.current.delete(fileId)
+  }, [files, selectedTalent])
 
   const retryUpload = useCallback(
     (fileId: string) => {
       const file = files.find((f) => f.id === fileId)
-      if (file) {
+      const originalFile = originalFilesRef.current.get(fileId)
+      if (file && originalFile) {
         const updatedFile = { ...file, status: "uploading" as const, progress: 0, error: undefined }
         setFiles((prev) => prev.map((f) => (f.id === fileId ? updatedFile : f)))
-        simulateUpload(updatedFile).catch(console.error)
+        uploadToS3(updatedFile, originalFile).catch(console.error)
       }
     },
     [files],
@@ -293,45 +450,70 @@ export function TalentSelector({
     <div className="space-y-4 py-[16] mx-4 px-6">
       <div className="flex items-center justify-between">
         <h4 className="text-sm font-medium">Selected Talent</h4>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleCreateNew}
-          disabled={isCreating}
-          className="gap-1 bg-transparent border-primary"
-        >
-          <Plus className="w-3 h-3" />
-          {isCreating ? "Creating..." : "New"}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={loadTalents}
+            disabled={isLoading}
+            className="h-8 w-8 p-0"
+          >
+            <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCreateNew}
+            disabled={isCreating}
+            className="gap-1 bg-transparent border-primary"
+          >
+            <Plus className="w-3 h-3" />
+            {isCreating ? "Creating..." : "New"}
+          </Button>
+        </div>
       </div>
 
       {/* Talent Selector Dropdown */}
-      <Select value={selectedTalent?.id} onValueChange={handleTalentSelect}>
-        <SelectTrigger>
-          <SelectValue placeholder="Select a talent profile" />
-        </SelectTrigger>
-        <SelectContent>
-          {mockTalents.map((talent) => (
-            <SelectItem key={talent.id} value={talent.id}>
-              <div className="flex items-center gap-2">
-                <div className="w-6 h-6 bg-primary/20 rounded-full flex items-center justify-center">
-                  <User className="w-3 h-3" />
+      {isLoading ? (
+        <div className="flex items-center justify-center p-4">
+          <Loader2 className="w-5 h-5 animate-spin" />
+        </div>
+      ) : talents.length === 0 ? (
+        <Card className="p-4 text-center">
+          <User className="w-6 h-6 mx-auto mb-2 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">No talents yet. Create one to get started.</p>
+        </Card>
+      ) : (
+        <Select value={selectedTalent?.id} onValueChange={handleTalentSelect}>
+          <SelectTrigger>
+            <SelectValue placeholder="Select a talent profile" />
+          </SelectTrigger>
+          <SelectContent>
+            {talents.map((talent) => (
+              <SelectItem key={talent.id} value={talent.id}>
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 bg-primary/20 rounded-full flex items-center justify-center">
+                    <User className="w-3 h-3" />
+                  </div>
+                  <span>{talent.name}</span>
+                  <Badge variant="outline" className="text-xs">
+                    {talent.category}
+                  </Badge>
                 </div>
-                <span>{talent.name}</span>
-                <Badge variant="outline" className="text-xs">
-                  {talent.category}
-                </Badge>
-              </div>
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
 
       {/* Selected Talent Card */}
       {selectedTalent && (
         <Card className="p-4 my-[16]">
           <div className="flex items-start gap-4">
-            <div className="w-12 h-12 bg-primary/20 rounded-full flex items-center justify-center">
+            <div
+              className="w-12 h-12 bg-primary/20 rounded-full flex items-center justify-center cursor-pointer hover:bg-primary/30 transition-colors"
+              onClick={handleOpenProfile}
+            >
               <span className="text-sm font-medium">
                 {selectedTalent.name
                   .split(" ")
@@ -341,23 +523,36 @@ export function TalentSelector({
             </div>
             <div className="flex-1">
               <div className="flex items-center justify-between">
-                <h5 className="font-medium">{selectedTalent.name}</h5>
+                <button
+                  onClick={handleOpenProfile}
+                  className="font-medium hover:underline text-left"
+                >
+                  {selectedTalent.name}
+                </button>
                 <div className="flex items-center gap-4 text-xs">
                   <div className="flex items-center gap-1">
                     <User className="w-3 h-3" />
-                    <span className="font-medium">{formatNumber(selectedTalent.stats.followers)}</span>
+                    <span className="font-medium">{formatNumber(selectedTalent.stats?.followers || 0)}</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <TrendingUp className="w-3 h-3" />
-                    <span className="font-medium">{selectedTalent.stats.engagement}%</span>
+                    <span className="font-medium">{selectedTalent.stats?.engagement || 0}%</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <Star className="w-3 h-3" />
-                    <span className="font-medium">{selectedTalent.stats.deals}</span>
+                    <span className="font-medium">{selectedTalent.stats?.deals || 0}</span>
                   </div>
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">{selectedTalent.category}</p>
+              <Button
+                variant="link"
+                size="sm"
+                onClick={handleOpenProfile}
+                className="h-auto p-0 text-xs text-primary"
+              >
+                View profile & manage documents
+              </Button>
             </div>
           </div>
 
@@ -458,6 +653,69 @@ export function TalentSelector({
             </div>
           )}
         </Card>
+      )}
+
+      {/* Create Talent Dialog */}
+      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Create New Talent</DialogTitle>
+            <DialogDescription>
+              Add a new talent profile. You can add more details later.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="name">Name</Label>
+              <Input
+                id="name"
+                placeholder="Enter talent name"
+                value={newTalentName}
+                onChange={(e) => setNewTalentName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newTalentName.trim()) {
+                    handleCreateTalent()
+                  }
+                }}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="category">Category</Label>
+              <Select value={newTalentCategory} onValueChange={setNewTalentCategory}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Creator">Creator</SelectItem>
+                  <SelectItem value="Influencer">Influencer</SelectItem>
+                  <SelectItem value="Athlete">Athlete</SelectItem>
+                  <SelectItem value="Artist">Artist</SelectItem>
+                  <SelectItem value="Musician">Musician</SelectItem>
+                  <SelectItem value="Actor">Actor</SelectItem>
+                  <SelectItem value="Other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateTalent} disabled={isCreating || !newTalentName.trim()}>
+              {isCreating ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Talent Profile Modal */}
+      {selectedTalent && (
+        <TalentProfileModal
+          talent={selectedTalent}
+          isOpen={showProfileModal}
+          onClose={() => setShowProfileModal(false)}
+          onTalentDeleted={handleTalentDeleted}
+        />
       )}
     </div>
   )

@@ -16,11 +16,14 @@ import {
   Gamepad2,
   Play,
   Bot,
+  AlertCircle,
 } from "lucide-react"
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import type { TalentProfile } from "./talent-profile-manager"
 import type { ToolType } from "@/app/page"
 import type { UploadedFile } from "./file-upload-zone"
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qaqyqok7j0.execute-api.us-east-1.amazonaws.com'
 
 interface AgentStep {
   id: string
@@ -157,22 +160,87 @@ export function HyperComputerTerminal({
   const [input, setInput] = useState("")
   const [isStreaming, setIsStreaming] = useState(false)
   const [messages, setMessages] = useState<AgentStep[]>([])
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [sessionError, setSessionError] = useState<string | null>(null)
+  const [isConnected, setIsConnected] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const sessionInitRef = useRef<string | null>(null)
 
   const toolConfig = getToolConfig(activeTool)
   const quickPrompts = getQuickPrompts(activeTool)
+
+  // Start chat session when talent is selected
+  const startChatSession = useCallback(async (talentId: string, talentName: string) => {
+    // Prevent duplicate session starts
+    if (sessionInitRef.current === talentId) return
+    sessionInitRef.current = talentId
+
+    setSessionError(null)
+    setIsConnected(false)
+
+    try {
+      const response = await fetch(`${API_URL}/api/chat/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          talent_id: talentId,
+          talent_name: talentName
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to start chat session')
+      }
+
+      const data = await response.json()
+      setSessionId(data.session_id)
+      setIsConnected(true)
+
+      // Add welcome message
+      const welcomeMessage: AgentStep = {
+        id: `welcome-${Date.now()}`,
+        agent: "system",
+        status: "completed",
+        message: data.message || `Connected! I have access to ${data.files_loaded} documents for ${data.talent_name}.`,
+        timestamp: new Date().toISOString(),
+        expanded: true,
+        data: {
+          files_loaded: data.files_loaded,
+          categories: data.categories,
+          talent_name: data.talent_name
+        }
+      }
+      setMessages([welcomeMessage])
+    } catch (error) {
+      console.error('Failed to start chat session:', error)
+      setSessionError('Failed to connect to AI chat. Please try again.')
+      sessionInitRef.current = null
+    }
+  }, [])
+
+  // Effect to start session when talent changes
+  // Connect to backend for any tool type when a talent is selected
+  useEffect(() => {
+    if (selectedTalent?.id) {
+      startChatSession(selectedTalent.id, selectedTalent.name)
+    }
+  }, [selectedTalent?.id, startChatSession])
 
   useEffect(() => {
     setMessages([])
     setInput("")
     setIsStreaming(false)
+    setSessionId(null)
+    setIsConnected(false)
+    setSessionError(null)
+    sessionInitRef.current = null
   }, [activeTool])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
-  const simulateStreaming = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!input.trim() || isStreaming) return
 
@@ -191,237 +259,128 @@ export function HyperComputerTerminal({
     }
     setMessages((prev) => [...prev, userMessage])
 
+    // If we have a session, use real API
+    if (sessionId && isConnected) {
+      try {
+        // Add processing indicator
+        const processingStep: AgentStep = {
+          id: `processing-${Date.now()}`,
+          agent: "profile_analyzer",
+          status: "running",
+          message: "Analyzing your request with uploaded documents...",
+          timestamp: new Date().toISOString(),
+          expanded: false,
+        }
+        setMessages((prev) => [...prev, processingStep])
+
+        const response = await fetch(`${API_URL}/api/chat/message`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sessionId,
+            message: query
+          })
+        })
+
+        if (!response.ok) {
+          throw new Error('Failed to send message')
+        }
+
+        const data = await response.json()
+
+        // Remove processing indicator and add real response
+        setMessages((prev) => {
+          const filtered = prev.filter(m => !m.id.startsWith('processing-'))
+
+          const responseStep: AgentStep = {
+            id: `response-${Date.now()}`,
+            agent: data.intent === 'search_deals' ? 'deal_matcher' : 'profile_analyzer',
+            status: "completed",
+            message: data.message,
+            timestamp: new Date().toISOString(),
+            expanded: true,
+            data: {
+              intent: data.intent,
+              deals_found: data.deals_found,
+              deals: data.deals,
+              knowledge_base_used: true
+            }
+          }
+
+          return [...filtered, responseStep]
+        })
+
+        // Pass deals to parent if found
+        if (data.deals && onDealsFound) {
+          onDealsFound(data.deals)
+        }
+      } catch (error) {
+        console.error('Chat error:', error)
+        setMessages((prev) => {
+          const filtered = prev.filter(m => !m.id.startsWith('processing-'))
+          return [...filtered, {
+            id: `error-${Date.now()}`,
+            agent: "system",
+            status: "error",
+            message: "Failed to get response. Please try again.",
+            timestamp: new Date().toISOString(),
+            expanded: true,
+          }]
+        })
+      }
+    } else {
+      // Fallback to mock mode for other tools or when not connected
+      await runMockChat(query)
+    }
+
+    setIsStreaming(false)
+  }
+
+  const runMockChat = async (query: string) => {
     const completedFiles = files.filter((f) => f.status === "completed")
     const fileNames = completedFiles.map((f) => f.name)
 
-    const getToolSpecificSteps = (tool: ToolType): Omit<AgentStep, "id">[] => {
-      const baseFileProcessingSteps =
-        completedFiles.length > 0
-          ? [
-              {
-                agent: "file_processor",
-                status: "running" as const,
-                message: `Processing ${completedFiles.length} uploaded files for talent context...`,
-                sources: fileNames,
-                timestamp: new Date().toISOString(),
-              },
-              {
-                agent: "file_processor",
-                status: "completed" as const,
-                message: `Successfully extracted talent data from ${fileNames.join(", ")} - Ready for ${tool} analysis`,
-                sources: fileNames,
-                timestamp: new Date().toISOString(),
-                data: {
-                  files_processed: completedFiles.length,
-                  data_extracted: true,
-                  talent_context_available: true,
-                  tool_optimized: tool,
-                },
-              },
-            ]
-          : [
-              {
-                agent: "file_processor",
-                status: "completed" as const,
-                message: "No files uploaded - Using basic talent profile for analysis",
-                sources: ["default_profile"],
-                timestamp: new Date().toISOString(),
-                data: { files_processed: 0, using_defaults: true },
-              },
-            ]
-
-      switch (tool) {
-        case "chat":
-          return [
-            ...baseFileProcessingSteps,
-            {
-              agent: "prompt_interpreter",
-              status: "running",
-              message: "Analyzing strategic request and available talent context...",
-              sources: ["conversation_context", "talent_profile", ...fileNames],
-              timestamp: new Date().toISOString(),
-            },
-            {
-              agent: "brand_strategist",
-              status: "running",
-              message: `Developing strategic recommendations ${completedFiles.length > 0 ? "based on uploaded talent data" : "using available context"}`,
-              sources: ["market_data", "brand_intelligence", ...fileNames],
-              timestamp: new Date().toISOString(),
-            },
-            {
-              agent: "contract_composer",
-              status: "completed",
-              message: `Generated strategic proposal with ${completedFiles.length > 0 ? "personalized" : "standard"} negotiation points`,
-              sources: ["legal_templates", "industry_standards", ...fileNames],
-              timestamp: new Date().toISOString(),
-              data: {
-                documents_created: 3,
-                clauses_suggested: 12,
-                file_context_used: completedFiles.length > 0,
-                personalization_level: completedFiles.length > 0 ? "high" : "standard",
-              },
-            },
-          ]
-        case "crawler":
-          return [
-            ...baseFileProcessingSteps,
-            {
-              agent: "opportunity_radar",
-              status: "running",
-              message: `Scanning NIL registries and brand databases ${completedFiles.length > 0 ? "for talent-specific opportunities" : "for market opportunities"}...`,
-              sources: ["nil_registry", "sec_filings", "press_releases", ...fileNames],
-              timestamp: new Date().toISOString(),
-            },
-            {
-              agent: "campaign_detector",
-              status: "running",
-              message: `Detecting active brand campaigns ${completedFiles.length > 0 ? "matching uploaded talent profile" : "in target market"}`,
-              sources: ["social_media", "brand_websites", "industry_news", ...fileNames],
-              timestamp: new Date().toISOString(),
-            },
-            {
-              agent: "pr_scanner",
-              status: "completed",
-              message: `Found 24 new opportunities ${completedFiles.length > 0 ? "tailored to uploaded talent data" : "in market"} with 78% avg sentiment`,
-              sources: ["media_monitoring", "brand_sentiment", ...fileNames],
-              timestamp: new Date().toISOString(),
-              data: {
-                opportunities_found: 24,
-                avg_sentiment: 0.78,
-                personalized: completedFiles.length > 0,
-                talent_match_score: completedFiles.length > 0 ? 0.89 : 0.65,
-              },
-            },
-          ]
-        case "gameplan":
-          return [
-            ...baseFileProcessingSteps,
-            {
-              agent: "brand_strategy",
-              status: "running",
-              message: `Analyzing brand campaign objectives ${completedFiles.length > 0 ? "and talent fit from uploaded files" : "with available data"}...`,
-              sources: ["brand_profile", "campaign_goals", ...fileNames],
-              timestamp: new Date().toISOString(),
-            },
-            {
-              agent: "match_engine",
-              status: "running",
-              message: `Matching brands to optimal sponsorship opportunities ${completedFiles.length > 0 ? "using talent-specific parameters" : "with market data"}`,
-              sources: ["venue_inventory", "audience_data", "pricing_models", ...fileNames],
-              timestamp: new Date().toISOString(),
-            },
-            {
-              agent: "roi_simulator",
-              status: "completed",
-              message: `Generated 8 partnership packages ${completedFiles.length > 0 ? "optimized for talent profile" : "with standard ROI projections"}`,
-              sources: ["historical_performance", "market_rates", ...fileNames],
-              timestamp: new Date().toISOString(),
-              data: {
-                packages_created: 8,
-                avg_roi: completedFiles.length > 0 ? 3.4 : 2.8,
-                talent_optimized: completedFiles.length > 0,
-                confidence_level: completedFiles.length > 0 ? 0.92 : 0.76,
-              },
-            },
-          ]
-        case "simulation":
-          return [
-            ...baseFileProcessingSteps,
-            {
-              agent: "simulation_planner",
-              status: "running",
-              message: `Setting up forecasting models ${completedFiles.length > 0 ? "with uploaded talent data" : "with available metrics"}...`,
-              sources: ["historical_data", "market_trends", ...fileNames],
-              timestamp: new Date().toISOString(),
-            },
-            {
-              agent: "revenue_forecaster",
-              status: "running",
-              message: `Running Monte Carlo simulations ${completedFiles.length > 0 ? "using talent-specific parameters" : "with market averages"}`,
-              sources: ["performance_data", "market_volatility", ...fileNames],
-              timestamp: new Date().toISOString(),
-            },
-            {
-              agent: "media_effectiveness",
-              status: "completed",
-              message: `Completed 1000 scenario simulations ${completedFiles.length > 0 ? "using talent-specific parameters" : "with confidence intervals"}`,
-              sources: ["engagement_models", "conversion_rates", ...fileNames],
-              timestamp: new Date().toISOString(),
-              data: {
-                scenarios_run: 1000,
-                confidence_level: completedFiles.length > 0 ? 0.95 : 0.82,
-                personalized: completedFiles.length > 0,
-                expected_roi_range: completedFiles.length > 0 ? "2.8x - 4.2x" : "1.9x - 3.1x",
-              },
-            },
-          ]
-        default:
-          return [
-            ...baseFileProcessingSteps,
-            {
-              agent: "profile_analyzer",
-              status: "running",
-              message: `Analyzing talent profile ${completedFiles.length > 0 ? "from uploaded files" : "and performance metrics"}`,
-              sources: completedFiles.length > 0 ? fileNames : ["talent_profile"],
-              timestamp: new Date().toISOString(),
-            },
-            {
-              agent: "deal_matcher",
-              status: "completed",
-              message: `Found 12 high-value brand deals ${completedFiles.length > 0 ? "matching uploaded talent profile" : "in market"}`,
-              sources: ["nike_partnership", "gatorade_campaign", "under_armour_deal", ...fileNames],
-              timestamp: new Date().toISOString(),
-              data: {
-                deals_found: 12,
-                avg_score: completedFiles.length > 0 ? 8.7 : 7.2,
-                file_context_used: completedFiles.length > 0,
-                personalization_level: completedFiles.length > 0 ? "high" : "standard",
-              },
-            },
-          ]
-      }
-    }
-
-    const mockSteps = getToolSpecificSteps(activeTool)
+    const mockSteps: Omit<AgentStep, "id">[] = [
+      {
+        agent: "profile_analyzer",
+        status: "running" as const,
+        message: `Analyzing request${completedFiles.length > 0 ? " with uploaded files" : ""}...`,
+        sources: completedFiles.length > 0 ? fileNames : ["talent_profile"],
+        timestamp: new Date().toISOString(),
+      },
+      {
+        agent: "deal_matcher",
+        status: "completed" as const,
+        message: `Analysis complete. ${completedFiles.length > 0 ? `Used context from ${fileNames.join(", ")}.` : "Using default profile."}`,
+        sources: ["market_data", ...fileNames],
+        timestamp: new Date().toISOString(),
+        data: {
+          mock_mode: true,
+          file_context_used: completedFiles.length > 0,
+        },
+      },
+    ]
 
     for (let i = 0; i < mockSteps.length; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 1500))
+      await new Promise((resolve) => setTimeout(resolve, 1000))
 
       const step: AgentStep = {
         ...mockSteps[i],
         id: `step-${Date.now()}-${i}`,
-        expanded: false,
+        expanded: i === mockSteps.length - 1,
       }
 
       setMessages((prev) => {
         const newMessages = [...prev]
-        if (i > 0 && newMessages[newMessages.length - 1]) {
+        if (i > 0 && newMessages.length > 0) {
           const lastIndex = newMessages.length - 1
           if (newMessages[lastIndex].agent !== "user") {
-            newMessages[lastIndex] = { ...newMessages[lastIndex], status: "completed", expanded: true }
+            newMessages[lastIndex] = { ...newMessages[lastIndex], status: "completed" }
           }
         }
         return [...newMessages, step]
       })
     }
-
-    // Complete the final step
-    setMessages((prev) => {
-      const newMessages = [...prev]
-      if (newMessages.length > 0) {
-        const lastIndex = newMessages.length - 1
-        if (newMessages[lastIndex].agent !== "user") {
-          newMessages[lastIndex] = {
-            ...newMessages[lastIndex],
-            status: "completed",
-            expanded: true,
-          }
-        }
-      }
-      return newMessages
-    })
-
-    setIsStreaming(false)
   }
 
   const handleQuickPrompt = (prompt: string) => {
@@ -622,12 +581,32 @@ export function HyperComputerTerminal({
 
       {/* Input Area - Fixed at bottom */}
       <div className="border-border p-4 bg-black border-none border-t-[0]">
-        <form onSubmit={simulateStreaming}>
+        {sessionError && (
+          <div className="mb-3 p-2 bg-destructive/10 border border-destructive/20 rounded-lg flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-destructive" />
+            <span className="text-sm text-destructive">{sessionError}</span>
+            {selectedTalent && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-auto text-xs"
+                onClick={() => startChatSession(selectedTalent.id, selectedTalent.name)}
+              >
+                Retry
+              </Button>
+            )}
+          </div>
+        )}
+        <form onSubmit={handleSubmit}>
           <div className="flex gap-2">
             <Input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={`Ask ${toolConfig.title.replace(" Terminal", "")} about talent opportunities...`}
+              placeholder={
+                isConnected
+                  ? `Ask about ${selectedTalent?.name || 'talent'}'s documents...`
+                  : `Ask ${toolConfig.title.replace(" Terminal", "")} about talent opportunities...`
+              }
               className="flex-1"
               disabled={isStreaming}
             />
@@ -636,10 +615,21 @@ export function HyperComputerTerminal({
             </Button>
           </div>
 
-          <div className="flex items-center justify-center mt-2">
-            <Badge variant="outline" className="text-xs">
-              Mock Mode - Using simulated data
-            </Badge>
+          <div className="flex items-center justify-center mt-2 gap-2">
+            {isConnected ? (
+              <Badge variant="outline" className="text-xs bg-green-500/10 text-green-600 border-green-500/20">
+                Connected to Knowledge Base
+              </Badge>
+            ) : selectedTalent ? (
+              <Badge variant="outline" className="text-xs bg-yellow-500/10 text-yellow-600 border-yellow-500/20">
+                <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                Connecting...
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="text-xs">
+                Mock Mode - Select a talent to enable AI
+              </Badge>
+            )}
           </div>
         </form>
       </div>

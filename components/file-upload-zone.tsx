@@ -28,7 +28,10 @@ export interface UploadedFile {
   url?: string
   error?: string
   talentId?: string
+  fileKey?: string
 }
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qaqyqok7j0.execute-api.us-east-1.amazonaws.com'
 
 interface FileUploadZoneProps {
   files: UploadedFile[]
@@ -43,6 +46,10 @@ const ACCEPTED_TYPES = {
   "application/pdf": [".pdf"],
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
   "application/vnd.ms-excel": [".xls"],
+  "application/msword": [".doc"],
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
+  "text/plain": [".txt"],
+  "text/csv": [".csv"],
   "image/*": [".jpg", ".jpeg", ".png", ".gif", ".webp"],
   "video/*": [".mp4", ".mov", ".avi", ".mkv"],
 }
@@ -95,48 +102,96 @@ export function FileUploadZone({
     return null
   }
 
-  const simulateUpload = async (file: UploadedFile): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      let progress = 0
-      const interval = setInterval(() => {
-        progress += Math.random() * 15
-        if (progress >= 100) {
-          progress = 100
-          clearInterval(interval)
+  const uploadToS3 = async (file: UploadedFile, originalFile: File): Promise<void> => {
+    try {
+      // 1. Get presigned URL from backend
+      const presignedResponse = await fetch(`${API_URL}/api/uploads/presigned-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: file.name,
+          content_type: file.type || 'application/octet-stream',
+          talent_id: talentId
+        })
+      })
 
-          // Simulate occasional upload failures
-          if (Math.random() < 0.1) {
-            onFilesChange(
-              files.map((f) =>
-                f.id === file.id ? { ...f, status: "error", error: "Upload failed. Please try again." } : f,
-              ),
-            )
-            reject(new Error("Upload failed"))
-          } else {
+      if (!presignedResponse.ok) {
+        throw new Error('Failed to get upload URL')
+      }
+
+      const presignedData = await presignedResponse.json()
+
+      // 2. Upload file directly to S3 using presigned POST
+      const formData = new FormData()
+      Object.entries(presignedData.fields).forEach(([key, value]) => {
+        formData.append(key, value as string)
+      })
+      formData.append('file', originalFile)
+
+      // Track upload progress using XMLHttpRequest
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+
+        xhr.upload.addEventListener('progress', (event) => {
+          if (event.lengthComputable) {
+            const progress = (event.loaded / event.total) * 100
+            onFilesChange(files.map((f) => (f.id === file.id ? { ...f, progress } : f)))
+          }
+        })
+
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
             onFilesChange(
               files.map((f) =>
                 f.id === file.id
-                  ? { ...f, status: "completed", progress: 100, url: `https://mock-s3.com/${f.name}` }
+                  ? {
+                      ...f,
+                      status: "completed" as const,
+                      progress: 100,
+                      url: presignedData.public_url,
+                      fileKey: presignedData.file_key
+                    }
                   : f,
               ),
             )
             resolve()
+          } else {
+            reject(new Error(`Upload failed with status ${xhr.status}`))
           }
-        } else {
-          onFilesChange(files.map((f) => (f.id === file.id ? { ...f, progress } : f)))
-        }
-      }, 200)
-    })
+        })
+
+        xhr.addEventListener('error', () => {
+          reject(new Error('Upload failed'))
+        })
+
+        xhr.open('POST', presignedData.upload_url)
+        xhr.send(formData)
+      })
+    } catch (error) {
+      onFilesChange(
+        files.map((f) =>
+          f.id === file.id
+            ? { ...f, status: "error" as const, error: error instanceof Error ? error.message : "Upload failed" }
+            : f,
+        ),
+      )
+      throw error
+    }
   }
+
+  // Store original files for retry functionality
+  const originalFilesRef = useRef<Map<string, File>>(new Map())
 
   const handleFiles = useCallback(
     async (fileList: FileList) => {
       const newFiles: UploadedFile[] = []
+      const fileArray = Array.from(fileList)
 
-      Array.from(fileList).forEach((file) => {
+      fileArray.forEach((file) => {
         const error = validateFile(file)
+        const fileId = `file-${Date.now()}-${Math.random()}`
         const uploadFile: UploadedFile = {
-          id: `file-${Date.now()}-${Math.random()}`,
+          id: fileId,
           name: file.name,
           size: file.size,
           type: file.type,
@@ -146,17 +201,22 @@ export function FileUploadZone({
           talentId,
         }
         newFiles.push(uploadFile)
+        // Store original file for potential retry
+        if (!error) {
+          originalFilesRef.current.set(fileId, file)
+        }
       })
 
       const updatedFiles = [...files, ...newFiles]
       onFilesChange(updatedFiles)
 
       // Start uploads for valid files
-      newFiles
-        .filter((file) => !file.error)
-        .forEach((file) => {
-          simulateUpload(file).catch(console.error)
-        })
+      for (const uploadFile of newFiles.filter((f) => !f.error)) {
+        const originalFile = originalFilesRef.current.get(uploadFile.id)
+        if (originalFile) {
+          uploadToS3(uploadFile, originalFile).catch(console.error)
+        }
+      }
     },
     [files, onFilesChange, talentId],
   )
@@ -200,8 +260,25 @@ export function FileUploadZone({
   )
 
   const removeFile = useCallback(
-    (fileId: string) => {
+    async (fileId: string) => {
+      const file = files.find((f) => f.id === fileId)
+
+      // If file was uploaded to S3, delete it from S3
+      if (file?.fileKey && file.status === "completed") {
+        try {
+          await fetch(`${API_URL}/api/uploads/files`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ file_key: file.fileKey })
+          })
+        } catch (error) {
+          console.error('Failed to delete file from S3:', error)
+        }
+      }
+
       onFilesChange(files.filter((f) => f.id !== fileId))
+      // Clean up stored original file
+      originalFilesRef.current.delete(fileId)
     },
     [files, onFilesChange],
   )
@@ -209,10 +286,11 @@ export function FileUploadZone({
   const retryUpload = useCallback(
     (fileId: string) => {
       const file = files.find((f) => f.id === fileId)
-      if (file) {
+      const originalFile = originalFilesRef.current.get(fileId)
+      if (file && originalFile) {
         const updatedFile = { ...file, status: "uploading" as const, progress: 0, error: undefined }
         onFilesChange(files.map((f) => (f.id === fileId ? updatedFile : f)))
-        simulateUpload(updatedFile).catch(console.error)
+        uploadToS3(updatedFile, originalFile).catch(console.error)
       }
     },
     [files, onFilesChange],

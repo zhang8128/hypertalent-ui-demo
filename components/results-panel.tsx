@@ -105,10 +105,16 @@ interface ResultsPanelProps {
   activeTool: ToolType
   sharedFiles?: UploadedFile[]
   onSharedFilesChange?: (files: UploadedFile[]) => void
+  selectedTalent?: TalentProfile
+  onTalentChange?: (talent: TalentProfile | undefined) => void
 }
 
-export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange }: ResultsPanelProps) {
-  const [selectedTalent, setSelectedTalent] = useState<TalentProfile>()
+export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange, selectedTalent: externalTalent, onTalentChange }: ResultsPanelProps) {
+  const [localTalent, setLocalTalent] = useState<TalentProfile>()
+
+  // Use external state if callback is provided, otherwise use local state
+  const selectedTalent = onTalentChange ? externalTalent : localTalent
+  const setSelectedTalent = onTalentChange || setLocalTalent
   const [files, setFiles] = useState<UploadedFile[]>(sharedFiles)
   const [deals, setDeals] = useState<Deal[]>([])
   const [filteredDeals, setFilteredDeals] = useState<Deal[]>([])

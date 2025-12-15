@@ -9,6 +9,7 @@ import { HyperComputerTerminal } from "@/components/hyper-computer-terminal"
 import { ResultsPanel } from "@/components/results-panel"
 import { ProtectedRoute } from "@/components/auth/protected-route"
 import type { UploadedFile } from "@/components/file-upload-zone"
+import type { TalentProfile } from "@/components/talent-selector"
 
 export type ToolType = "chat" | "crawler" | "deal-hunter" | "gameplan" | "simulation"
 
@@ -17,6 +18,7 @@ export default function DealHunterPage() {
   const [rightPanelWidth, setRightPanelWidth] = useState(720) // Maximum width for expanded layout
   const [isResizing, setIsResizing] = useState(false)
   const [sharedFiles, setSharedFiles] = useState<UploadedFile[]>([])
+  const [selectedTalent, setSelectedTalent] = useState<TalentProfile>()
   const containerRef = useRef<HTMLDivElement>(null)
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -80,7 +82,7 @@ export default function DealHunterPage() {
               <>
                 {/* Center - Hyper Computer Terminal */}
                 <div className="flex-1 min-w-[400px] border-r border-border/50">
-                  <HyperComputerTerminal activeTool={activeTool} files={sharedFiles} />
+                  <HyperComputerTerminal activeTool={activeTool} files={sharedFiles} selectedTalent={selectedTalent} />
                 </div>
 
                 <div
@@ -99,7 +101,13 @@ export default function DealHunterPage() {
               className={activeTool === "deal-hunter" ? "flex-1" : "min-w-80 max-w-[720px] border-l border-border/20"}
               style={activeTool === "deal-hunter" ? {} : { width: rightPanelWidth }}
             >
-              <ResultsPanel activeTool={activeTool} sharedFiles={sharedFiles} onSharedFilesChange={setSharedFiles} />
+              <ResultsPanel
+                activeTool={activeTool}
+                sharedFiles={sharedFiles}
+                onSharedFilesChange={setSharedFiles}
+                selectedTalent={selectedTalent}
+                onTalentChange={setSelectedTalent}
+              />
             </div>
           </div>
         </div>
