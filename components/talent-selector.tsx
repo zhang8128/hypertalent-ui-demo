@@ -69,7 +69,7 @@ interface TalentSelectorProps {
   selectedTalent?: TalentProfile
   onTalentChange: (talent: TalentProfile) => void
   onCreateNew: () => void
-  onStartDiscovery?: () => void
+  onStartDiscovery?: (prompt: string, searchDurationMinutes: number) => void
   isDiscovering?: boolean
   onFilesChange?: (files: UploadedFile[]) => void
 }
@@ -105,6 +105,8 @@ export function TalentSelector({
   const [files, setFiles] = useState<UploadedFile[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
   const [showProfileModal, setShowProfileModal] = useState(false)
+  const [discoveryPrompt, setDiscoveryPrompt] = useState("")
+  const [searchDurationMinutes, setSearchDurationMinutes] = useState(1)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const originalFilesRef = useRef<Map<string, File>>(new Map())
 
@@ -640,9 +642,53 @@ export function TalentSelector({
           </div>
 
           {onStartDiscovery && (
-            <div className="border-t mt-[0] pt-[0]">
+            <div className="border-t mt-4 pt-4 space-y-3">
+              <div className="space-y-2">
+                <Label htmlFor="discovery-prompt" className="text-sm font-medium">
+                  Discovery Prompt
+                </Label>
+                <Input
+                  id="discovery-prompt"
+                  placeholder="e.g., Find me some shoe brands to partner with..."
+                  value={discoveryPrompt}
+                  onChange={(e) => setDiscoveryPrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && discoveryPrompt.trim() && !isDiscovering) {
+                      onStartDiscovery(discoveryPrompt, searchDurationMinutes)
+                    }
+                  }}
+                  disabled={isDiscovering}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Describe what kind of brand partnerships you're looking for
+                </p>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="search-duration" className="text-sm font-medium">
+                    Search Duration
+                  </Label>
+                  <span className="text-sm font-medium text-primary">
+                    {searchDurationMinutes} {searchDurationMinutes === 1 ? 'minute' : 'minutes'}
+                  </span>
+                </div>
+                <input
+                  id="search-duration"
+                  type="range"
+                  min="1"
+                  max="60"
+                  value={searchDurationMinutes}
+                  onChange={(e) => setSearchDurationMinutes(parseInt(e.target.value))}
+                  disabled={isDiscovering}
+                  className="w-full h-2 bg-secondary rounded-lg appearance-none cursor-pointer accent-primary"
+                />
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>1 min (quick)</span>
+                  <span>60 min (thorough)</span>
+                </div>
+              </div>
               <Button
-                onClick={onStartDiscovery}
+                onClick={() => onStartDiscovery(discoveryPrompt || "Find brand partnership deals for this talent", searchDurationMinutes)}
                 disabled={isDiscovering}
                 className="w-full gap-2 bg-[#AE94FB] hover:bg-[#9B7EF7] text-black font-medium"
                 size="sm"

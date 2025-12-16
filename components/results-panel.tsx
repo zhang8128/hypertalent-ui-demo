@@ -1,6 +1,8 @@
 "use client"
-import { FileText, CheckCircle } from "lucide-react"
-import { useState, useEffect } from "react"
+import { FileText, CheckCircle, History, Loader2, FolderOpen } from "lucide-react"
+import { useState, useEffect, useCallback } from "react"
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qaqyqok7j0.execute-api.us-east-1.amazonaws.com'
 import { FileUploadZone, type UploadedFile } from "./file-upload-zone"
 import { TalentSelector, type TalentProfile } from "./talent-selector"
 import type { DealFilters as DealFiltersType } from "./deal-filters"
@@ -16,6 +18,17 @@ import { SimulationResultsPanel } from "./tools/simulation-results-panel"
 import type { Deal } from "@/types/deal"
 import type { ToolType } from "@/app/page"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
+
+interface SavedDealFile {
+  filename: string
+  file_key: string
+  last_modified: string
+  size: number
+  prompt: string
+  deal_count: number
+}
 
 const mockDeals: Deal[] = [
   {
@@ -125,6 +138,9 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
   const [showDetailsModal, setShowDetailsModal] = useState(false)
   const [showOutreachModal, setShowOutreachModal] = useState(false)
   const [showExportModal, setShowExportModal] = useState(false)
+  const [savedDealFiles, setSavedDealFiles] = useState<SavedDealFile[]>([])
+  const [isLoadingSavedDeals, setIsLoadingSavedDeals] = useState(false)
+  const [selectedSavedFile, setSelectedSavedFile] = useState<string | null>(null)
 
   const [filters, setFilters] = useState<DealFiltersType>({
     search: "",
@@ -135,6 +151,8 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
     sortOrder: "desc",
     tags: [],
   })
+  const [discoveryPrompt, setDiscoveryPrompt] = useState("Find brand partnership deals for this talent")
+  const [searchDurationMinutes, setSearchDurationMinutes] = useState(1)
 
   useEffect(() => {
     setFiles(sharedFiles)
@@ -159,6 +177,82 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
     localStorage.setItem("hyper-talent-files", JSON.stringify(files))
   }, [files])
 
+  // Load saved deal files when talent changes
+  useEffect(() => {
+    if (selectedTalent) {
+      loadSavedDealFiles(selectedTalent.id)
+    } else {
+      setSavedDealFiles([])
+      setDeals([])
+    }
+  }, [selectedTalent])
+
+  const loadSavedDealFiles = async (talentId: string) => {
+    setIsLoadingSavedDeals(true)
+    try {
+      const response = await fetch(`${API_URL}/api/discovery/deals/${talentId}`)
+      if (response.ok) {
+        const data = await response.json()
+        setSavedDealFiles(data.deal_files || [])
+
+        // Auto-load the most recent deal file if available
+        if (data.deal_files && data.deal_files.length > 0) {
+          await loadDealFile(talentId, data.deal_files[0].filename)
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load saved deal files:', error)
+    } finally {
+      setIsLoadingSavedDeals(false)
+    }
+  }
+
+  const loadDealFile = async (talentId: string, filename: string) => {
+    try {
+      const response = await fetch(`${API_URL}/api/discovery/deals/${talentId}/${filename}`)
+      if (response.ok) {
+        const data = await response.json()
+        // Convert API deals to frontend Deal format
+        const loadedDeals: Deal[] = (data.deals || []).map((deal: any, index: number) => ({
+          id: deal.id || `deal-${Date.now()}-${index}`,
+          brand: deal.brand || 'Unknown Brand',
+          title: deal.title || `Partnership with ${deal.brand}`,
+          category: deal.category || 'General',
+          valueRange: deal.value_range || '$25K-100K',
+          matchScore: parseFloat(deal.match_score) || 7.0,
+          description: deal.description || '',
+          tags: [deal.category, deal.industry].filter(Boolean),
+          deadline: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+          requirements: [],
+          engagement: 4.0,
+          reach: "500K",
+          conversions: `${(parseFloat(deal.success_probability) * 100 || 70).toFixed(0)}%`,
+          industry: deal.industry || 'General',
+          companySize: "Enterprise",
+          duration: "3-6 months",
+          startDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+          contact: {
+            name: `${deal.brand} Partnership Team`,
+            email: `partnerships@${deal.brand?.toLowerCase().replace(/\\s+/g, '')}.com`,
+            department: "Brand Partnerships",
+          },
+          status: deal.status || "new",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          estimatedValue: parseInt(deal.estimated_value) || 0,
+          successProbability: parseFloat(deal.success_probability) || 0,
+          priority: deal.priority || 'Medium',
+          recommendedApproach: deal.recommended_approach || '',
+        }))
+        setDeals(loadedDeals)
+        setSelectedSavedFile(filename)
+        setShowDiscoveryEngine(false) // Hide discovery engine when loading saved deals
+      }
+    } catch (error) {
+      console.error('Failed to load deal file:', error)
+    }
+  }
+
   const handleProcessFiles = async () => {
     if (!selectedTalent) {
       alert("Please select a talent profile first")
@@ -170,22 +264,70 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
     setIsDiscovering(true)
   }
 
-  const handleDiscoveryComplete = (discoveredDeals: Deal[]) => {
+  const handleDiscoveryComplete = useCallback(async (discoveredDeals: Deal[]) => {
     setDeals(discoveredDeals)
     setIsDiscovering(false)
     setIsProcessing(false)
-  }
+
+    // Save deals as CSV to S3
+    if (selectedTalent && discoveredDeals.length > 0) {
+      try {
+        const response = await fetch(`${API_URL}/api/discovery/save-deals`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            talent_id: selectedTalent.id,
+            talent_name: selectedTalent.name,
+            prompt: discoveryPrompt,
+            deals: discoveredDeals.map(deal => ({
+              id: deal.id,
+              brand: deal.brand,
+              title: deal.title,
+              category: deal.category,
+              value_range: deal.valueRange,
+              match_score: deal.matchScore,
+              description: deal.description,
+              industry: deal.industry,
+              status: deal.status,
+              priority: (deal as any).priority || 'Medium',
+              estimated_value: (deal as any).estimatedValue || 0,
+              success_probability: (deal as any).successProbability || 0,
+              recommended_approach: (deal as any).recommendedApproach || '',
+            }))
+          })
+        })
+
+        if (response.ok) {
+          const result = await response.json()
+          console.log('Deals saved to S3:', result)
+          // Reload saved deal files to show the new one
+          await loadSavedDealFiles(selectedTalent.id)
+          setSelectedSavedFile(result.filename)
+        }
+      } catch (error) {
+        console.error('Failed to save deals to S3:', error)
+      }
+    }
+  }, [selectedTalent, discoveryPrompt])
 
   const handleSessionComplete = (session: any) => {
     console.log("Discovery session completed:", session)
     setIsDiscovering(false)
   }
 
-  const handleStartDiscovery = () => {
+  const handleStartDiscovery = (prompt?: string, durationMinutes?: number) => {
     if (!selectedTalent) {
       alert("Please select a talent profile first")
       return
     }
+    if (prompt) {
+      setDiscoveryPrompt(prompt)
+    }
+    if (durationMinutes) {
+      setSearchDurationMinutes(durationMinutes)
+    }
+    setSelectedSavedFile(null) // Clear selected saved file when starting new discovery
+    setDeals([]) // Clear current deals
     setShowDiscoveryEngine(true)
     setIsDiscovering(true)
   }
@@ -266,11 +408,74 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
       default:
         return (
           <>
+            {/* Saved Deal Files Section */}
+            {selectedTalent && savedDealFiles.length > 0 && !showDiscoveryEngine && (
+              <div className="mx-10 mb-6">
+                <Card className="p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <History className="w-4 h-4" />
+                      <h4 className="font-medium text-sm">Saved Discovery Sessions</h4>
+                      <Badge variant="outline" className="text-xs">
+                        {savedDealFiles.length} sessions
+                      </Badge>
+                    </div>
+                    {isLoadingSavedDeals && <Loader2 className="w-4 h-4 animate-spin" />}
+                  </div>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {savedDealFiles.map((file) => (
+                      <div
+                        key={file.filename}
+                        className={`flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors ${
+                          selectedSavedFile === file.filename
+                            ? 'bg-primary/20 border border-primary/40'
+                            : 'bg-secondary/50 hover:bg-secondary'
+                        }`}
+                        onClick={() => selectedTalent && loadDealFile(selectedTalent.id, file.filename)}
+                      >
+                        <div className="flex items-center gap-3">
+                          <FolderOpen className="w-4 h-4 text-muted-foreground" />
+                          <div>
+                            <p className="text-sm font-medium">
+                              {file.deal_count} deals
+                              {selectedSavedFile === file.filename && (
+                                <Badge className="ml-2 text-xs" variant="default">Active</Badge>
+                              )}
+                            </p>
+                            <p className="text-xs text-muted-foreground truncate max-w-xs">
+                              {file.prompt || 'No prompt specified'}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {new Date(file.last_modified).toLocaleDateString()}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              </div>
+            )}
+
+            {/* No saved deals message */}
+            {selectedTalent && savedDealFiles.length === 0 && !showDiscoveryEngine && !isLoadingSavedDeals && deals.length === 0 && (
+              <div className="mx-10 mb-6">
+                <Card className="p-6 text-center">
+                  <FolderOpen className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
+                  <p className="text-muted-foreground">No saved deals for this talent yet.</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Use the Discovery Prompt above to find brand partnership opportunities.
+                  </p>
+                </Card>
+              </div>
+            )}
+
             {showDiscoveryEngine && selectedTalent && (
               <div className="mx-10">
                 <AIDealDiscoveryEngine
                   selectedTalent={selectedTalent}
-                  query="Find brand partnership deals for this talent"
+                  query={discoveryPrompt}
+                  searchDurationMinutes={searchDurationMinutes}
                   onDealsFound={handleDiscoveryComplete}
                   onSessionComplete={handleSessionComplete}
                 />

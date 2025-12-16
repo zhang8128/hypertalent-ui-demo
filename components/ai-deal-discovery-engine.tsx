@@ -1,14 +1,17 @@
 "use client"
 
 import type { ReactNode } from "react"
-import { useEffect } from "react" // Moved import to the top level
+import { useEffect, useCallback } from "react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { Brain, FileSearch, Target, Zap, CheckCircle, AlertCircle, TrendingUp, Users } from "lucide-react"
+import { Brain, FileSearch, Target, Zap, CheckCircle, AlertCircle, TrendingUp, Users
+} from "lucide-react"
 import { useState } from "react"
 import type { Deal } from "@/types/deal"
 import type { TalentProfile } from "./talent-profile-manager"
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qaqyqok7j0.execute-api.us-east-1.amazonaws.com'
 
 interface AIAgent {
   id: string
@@ -35,55 +38,12 @@ interface DiscoverySession {
 interface AIDiscoveryEngineProps {
   selectedTalent?: TalentProfile
   query: string
+  searchDurationMinutes?: number
   onDealsFound: (deals: Deal[]) => void
   onSessionComplete: (session: DiscoverySession) => void
 }
 
-// Mock brand database for deal matching
-const mockBrandDatabase = [
-  {
-    brand: "Nike",
-    categories: ["Sports", "Fitness", "Lifestyle"],
-    dealTypes: ["Endorsement", "Product Placement", "Campaign"],
-    budgetRange: "$50K-$500K",
-    targetAudience: "Athletes, Fitness Enthusiasts",
-    requirements: ["1M+ followers", "Sports content", "High engagement"],
-  },
-  {
-    brand: "Gatorade",
-    categories: ["Sports", "Nutrition", "Performance"],
-    dealTypes: ["Sponsorship", "Content Creation", "Event Partnership"],
-    budgetRange: "$25K-$200K",
-    targetAudience: "Athletes, Active Lifestyle",
-    requirements: ["Sports background", "Performance content", "500K+ followers"],
-  },
-  {
-    brand: "Patagonia",
-    categories: ["Outdoor", "Sustainability", "Adventure"],
-    dealTypes: ["Brand Ambassador", "Content Partnership", "Campaign"],
-    budgetRange: "$15K-$100K",
-    targetAudience: "Outdoor Enthusiasts, Eco-conscious",
-    requirements: ["Outdoor content", "Sustainability values", "Authentic storytelling"],
-  },
-  {
-    brand: "Red Bull",
-    categories: ["Energy", "Extreme Sports", "Gaming", "Music"],
-    dealTypes: ["Sponsorship", "Event Partnership", "Content Creation"],
-    budgetRange: "$30K-$300K",
-    targetAudience: "Young Adults, Gamers, Athletes",
-    requirements: ["High energy content", "Young audience", "Creative content"],
-  },
-  {
-    brand: "Under Armour",
-    categories: ["Sports", "Fitness", "Performance"],
-    dealTypes: ["Endorsement", "Product Testing", "Campaign"],
-    budgetRange: "$40K-$250K",
-    targetAudience: "Athletes, Fitness Community",
-    requirements: ["Athletic background", "Performance focus", "Training content"],
-  },
-]
-
-const AIDiscoveryEngine = ({ selectedTalent, query, onDealsFound, onSessionComplete }: AIDiscoveryEngineProps) => {
+const AIDiscoveryEngine = ({ selectedTalent, query, searchDurationMinutes = 1, onDealsFound, onSessionComplete }: AIDiscoveryEngineProps) => {
   const [session, setSession] = useState<DiscoverySession | null>(null)
   const [isRunning, setIsRunning] = useState(false)
 
@@ -122,170 +82,101 @@ const AIDiscoveryEngine = ({ selectedTalent, query, onDealsFound, onSessionCompl
     },
   ]
 
-  const calculateMatchScore = (talent: TalentProfile, brand: any): number => {
-    let score = 0
-
-    // Category alignment (40% weight)
-    const talentCategories = talent.brandAlignment?.categories || []
-    const brandCategories = brand.categories || []
-    const categoryMatch = brandCategories.some((cat: string) => talentCategories.includes(cat))
-    if (categoryMatch) score += 4
-
-    // Follower requirements (30% weight)
-    const requirements = brand.requirements || []
-    const followerReq = requirements.find((req: string) => req.includes("followers"))
-    if (followerReq) {
-      const reqNumber = Number.parseInt(followerReq.replace(/\D/g, ""))
-      const followerCount = talent.stats?.followers || 0
-      if (followerCount >= reqNumber) score += 3
-    }
-
-    // Engagement rate (20% weight)
-    const engagementRate = talent.stats?.engagement || 0
-    if (engagementRate >= 4.0) score += 2
-    else if (engagementRate >= 2.0) score += 1
-
-    // Past brand alignment (10% weight)
-    const pastBrands = talent.brandAlignment?.pastBrands || []
-    const brandAlignment = pastBrands.length > 0 ? 1 : 0
-    score += brandAlignment
-
-    return Math.min(score, 10)
+  const convertApiDealsToFrontend = (apiDeals: any[]): Deal[] => {
+    return apiDeals.map((deal, index) => ({
+      id: deal.id || `deal-${Date.now()}-${index}`,
+      brand: deal.brand,
+      title: `${deal.deal_types?.[0] || 'Partnership'} with ${deal.brand}`,
+      category: deal.categories?.[0] || deal.industry || 'General',
+      valueRange: deal.budget_range || '$25K-100K',
+      matchScore: deal.match_score || 7.0,
+      description: `${deal.match_reasons?.join('. ') || 'Strong potential fit'}. ${deal.recommended_approach || ''}`,
+      tags: [...(deal.categories || []), ...(deal.deal_types || [])],
+      deadline: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+      requirements: deal.requirements?.content_types || [],
+      engagement: deal.engagement || 4.0,
+      reach: deal.reach || "500K",
+      conversions: `${(deal.success_probability * 100 || 70).toFixed(0)}%`,
+      industry: deal.industry || 'General',
+      companySize: "Enterprise",
+      duration: deal.timeline || "3-6 months",
+      startDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+      contact: {
+        name: `${deal.brand} Partnership Team`,
+        email: `partnerships@${deal.brand?.toLowerCase().replace(/\s+/g, '')}.com`,
+        department: "Brand Partnerships",
+      },
+      status: "new",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      // Additional fields from API
+      estimatedValue: deal.estimated_value,
+      successProbability: deal.success_probability,
+      priority: deal.priority,
+      recommendedApproach: deal.recommended_approach,
+    }))
   }
 
-  const generateMockDeals = (talent: TalentProfile): Deal[] => {
-    return mockBrandDatabase
-      .map((brand, index) => {
-        const matchScore = calculateMatchScore(talent, brand)
-        const baseValue = Number.parseInt(brand.budgetRange.split("-")[0].replace(/\D/g, ""))
-        const maxValue = Number.parseInt(brand.budgetRange.split("-")[1].replace(/\D/g, ""))
+  const runAgentWithProgress = async (
+    agentId: string,
+    agents: AIAgent[],
+    apiCall: () => Promise<any>
+  ): Promise<{ agents: AIAgent[], result: any }> => {
+    // Update agent to running status
+    let updatedAgents = agents.map((agent) =>
+      agent.id === agentId ? { ...agent, status: "running" as const, progress: 0 } : agent
+    )
+    setSession((prev) => (prev ? { ...prev, agents: updatedAgents } : null))
 
-        const followerCount = talent.stats?.followers || 0
-        const engagementRate = talent.stats?.engagement || 0
-        const category = talent.category || "Creator"
-        const brandCategories = brand.categories || []
-        const dealTypes = brand.dealTypes || []
-        const requirements = brand.requirements || []
-
-        return {
-          id: `deal-${Date.now()}-${index}`,
-          brand: brand.brand,
-          title: `${dealTypes[0] || "Partnership"} Partnership with ${brand.brand}`,
-          category: brandCategories[0] || "General",
-          valueRange: brand.budgetRange,
-          matchScore,
-          description: `Exclusive ${(dealTypes[0] || "partnership").toLowerCase()} opportunity with ${brand.brand}. Perfect for ${category.toLowerCase()}s with strong ${brandCategories.join(", ").toLowerCase()} content.`,
-          tags: [...brandCategories, ...dealTypes],
-          deadline: new Date(Date.now() + Math.random() * 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          requirements: requirements,
-          engagement: engagementRate,
-          reach: `${Math.floor(followerCount * (engagementRate / 100))}`,
-          conversions: `${(matchScore * 0.5).toFixed(1)}%`,
-          industry: brandCategories[0] || "General",
-          companySize: "Enterprise",
-          duration: "6 months",
-          startDate: new Date(Date.now() + Math.random() * 14 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          contact: {
-            name: `${brand.brand} Partnership Team`,
-            email: `partnerships@${brand.brand.toLowerCase().replace(/\s+/g, "")}.com`,
-            department: "Brand Partnerships",
-          },
-          status: "new",
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
+    // Simulate progress while waiting for API
+    const progressInterval = setInterval(() => {
+      updatedAgents = updatedAgents.map((agent) => {
+        if (agent.id === agentId && agent.status === "running") {
+          const newProgress = Math.min(agent.progress + Math.random() * 15, 90)
+          return { ...agent, progress: newProgress }
         }
+        return agent
       })
-      .sort((a, b) => b.matchScore - a.matchScore)
-  }
+      setSession((prev) => (prev ? { ...prev, agents: updatedAgents } : null))
+    }, 500)
 
-  const runAgent = async (agentId: string, agents: AIAgent[]): Promise<AIAgent[]> => {
-    return new Promise((resolve) => {
-      const startTime = Date.now()
+    try {
+      // Call the real API
+      const result = await apiCall()
 
-      // Update agent to running status
-      let updatedAgents = agents.map((agent) =>
-        agent.id === agentId ? { ...agent, status: "running" as const, progress: 0 } : agent,
+      clearInterval(progressInterval)
+
+      // Update agent to completed
+      updatedAgents = updatedAgents.map((agent) =>
+        agent.id === agentId
+          ? {
+              ...agent,
+              status: "completed" as const,
+              progress: 100,
+              results: result.results,
+              processingTime: result.processing_time_ms,
+            }
+          : agent
       )
       setSession((prev) => (prev ? { ...prev, agents: updatedAgents } : null))
 
-      // Simulate progress
-      const progressInterval = setInterval(() => {
-        updatedAgents = updatedAgents.map((agent) => {
-          if (agent.id === agentId && agent.status === "running") {
-            const newProgress = Math.min(agent.progress + Math.random() * 25, 95)
-            return { ...agent, progress: newProgress }
-          }
-          return agent
-        })
-        setSession((prev) => (prev ? { ...prev, agents: updatedAgents } : null))
-      }, 300)
+      return { agents: updatedAgents, result }
+    } catch (error) {
+      clearInterval(progressInterval)
 
-      // Complete after random time
-      setTimeout(
-        () => {
-          clearInterval(progressInterval)
-          const processingTime = Date.now() - startTime
-
-          // Generate results based on agent type
-          let results = {}
-          switch (agentId) {
-            case "file_processor":
-              const documentsCount = selectedTalent?.documents?.length || 0
-              results = {
-                documentsProcessed: documentsCount,
-                metricsExtracted: ["follower_count", "engagement_rate", "audience_demographics"],
-                dataQuality: "High",
-              }
-              break
-            case "profile_analyzer":
-              const demographics = selectedTalent?.demographics || {}
-              const brandAlignment = selectedTalent?.brandAlignment || {}
-              results = {
-                audienceInsights: {
-                  primaryAge: demographics.ageRange || "18-34",
-                  topInterests: demographics.interests || [],
-                  locations: demographics.topLocations || [],
-                },
-                brandFit: brandAlignment.categories || [],
-              }
-              break
-            case "deal_matcher":
-              const deals = selectedTalent ? generateMockDeals(selectedTalent) : []
-              results = {
-                dealsFound: deals.length,
-                avgMatchScore: deals.reduce((sum, deal) => sum + deal.matchScore, 0) / deals.length,
-                topBrands: deals.slice(0, 3).map((d) => d.brand),
-              }
-              break
-            case "opportunity_scorer":
-              results = {
-                dealsScored: mockBrandDatabase.length,
-                highValueDeals: 3,
-                recommendedActions: ["Focus on top 3 matches", "Prepare custom pitch decks"],
-              }
-              break
-          }
-
-          updatedAgents = updatedAgents.map((agent) =>
-            agent.id === agentId
-              ? {
-                  ...agent,
-                  status: "completed" as const,
-                  progress: 100,
-                  results,
-                  processingTime,
-                }
-              : agent,
-          )
-
-          resolve(updatedAgents)
-        },
-        2000 + Math.random() * 3000,
+      // Update agent to error
+      updatedAgents = updatedAgents.map((agent) =>
+        agent.id === agentId
+          ? { ...agent, status: "error" as const, progress: 0 }
+          : agent
       )
-    })
+      setSession((prev) => (prev ? { ...prev, agents: updatedAgents } : null))
+
+      throw error
+    }
   }
 
-  const startDiscovery = async () => {
+  const startDiscovery = useCallback(async () => {
     if (!selectedTalent) return
 
     setIsRunning(true)
@@ -307,15 +198,117 @@ const AIDiscoveryEngine = ({ selectedTalent, query, onDealsFound, onSessionCompl
 
     try {
       let currentAgents = newSession.agents
+      let documents: Record<string, string> = {}
+      let talentDna: any = {}
+      let matchedDeals: any[] = []
 
-      // Run agents sequentially
-      for (const agent of currentAgents) {
-        currentAgents = await runAgent(agent.id, currentAgents)
-        setSession((prev) => (prev ? { ...prev, agents: currentAgents } : null))
+      // Convert frontend talent profile to API format
+      const talentProfile = {
+        id: selectedTalent.id,
+        name: selectedTalent.name,
+        category: selectedTalent.category,
+        stats: selectedTalent.stats,
+        demographics: selectedTalent.demographics,
+        brandAlignment: selectedTalent.brandAlignment,
+        documents: selectedTalent.documents,
       }
 
-      // Generate final deals
-      const finalDeals = generateMockDeals(selectedTalent)
+      // Agent 1: File Processor
+      const agent1Result = await runAgentWithProgress(
+        "file_processor",
+        currentAgents,
+        async () => {
+          const response = await fetch(`${API_URL}/api/discovery/agent/file-processor`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              session_id: sessionId,
+              talent_id: selectedTalent.id,
+              talent_name: selectedTalent.name,
+              talent_profile: talentProfile,
+            })
+          })
+          if (!response.ok) throw new Error('File processor failed')
+          return response.json()
+        }
+      )
+      currentAgents = agent1Result.agents
+      documents = agent1Result.result.documents || {}
+
+      // Agent 2: Profile Analyzer
+      const agent2Result = await runAgentWithProgress(
+        "profile_analyzer",
+        currentAgents,
+        async () => {
+          const response = await fetch(`${API_URL}/api/discovery/agent/profile-analyzer`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              session_id: sessionId,
+              talent_id: selectedTalent.id,
+              talent_name: selectedTalent.name,
+              talent_profile: talentProfile,
+              documents,
+            })
+          })
+          if (!response.ok) throw new Error('Profile analyzer failed')
+          return response.json()
+        }
+      )
+      currentAgents = agent2Result.agents
+      talentDna = agent2Result.result.talent_dna || {}
+
+      // Agent 3: Deal Matcher (now uses AI search with the query)
+      const agent3Result = await runAgentWithProgress(
+        "deal_matcher",
+        currentAgents,
+        async () => {
+          const response = await fetch(`${API_URL}/api/discovery/agent/deal-matcher`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              session_id: sessionId,
+              talent_id: selectedTalent.id,
+              talent_name: selectedTalent.name,
+              talent_profile: talentProfile,
+              talent_dna: talentDna,
+              search_prompt: query,
+              search_duration_minutes: searchDurationMinutes,
+            })
+          })
+          if (!response.ok) throw new Error('Deal matcher failed')
+          return response.json()
+        }
+      )
+      currentAgents = agent3Result.agents
+      matchedDeals = agent3Result.result.matched_deals || []
+
+      // Agent 4: Opportunity Scorer
+      const agent4Result = await runAgentWithProgress(
+        "opportunity_scorer",
+        currentAgents,
+        async () => {
+          const response = await fetch(`${API_URL}/api/discovery/agent/opportunity-scorer`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              session_id: sessionId,
+              talent_id: selectedTalent.id,
+              talent_name: selectedTalent.name,
+              talent_profile: talentProfile,
+              talent_dna: talentDna,
+              matched_deals: matchedDeals,
+            })
+          })
+          if (!response.ok) throw new Error('Opportunity scorer failed')
+          return response.json()
+        }
+      )
+      currentAgents = agent4Result.agents
+      const scoredDeals = agent4Result.result.scored_deals || []
+
+      // Convert API deals to frontend format
+      const finalDeals = convertApiDealsToFrontend(scoredDeals)
       const totalTime = currentAgents.reduce((sum, agent) => sum + (agent.processingTime || 0), 0)
 
       const completedSession: DiscoverySession = {
@@ -335,13 +328,13 @@ const AIDiscoveryEngine = ({ selectedTalent, query, onDealsFound, onSessionCompl
     } finally {
       setIsRunning(false)
     }
-  }
+  }, [selectedTalent, query, searchDurationMinutes, onDealsFound, onSessionComplete])
 
   useEffect(() => {
     if (selectedTalent && !session && !isRunning) {
       startDiscovery()
     }
-  }, [selectedTalent])
+  }, [selectedTalent, session, isRunning, startDiscovery])
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -359,8 +352,8 @@ const AIDiscoveryEngine = ({ selectedTalent, query, onDealsFound, onSessionCompl
   return (
     <div className="space-y-6 mx-8">
       <div className="mb-6">
-        
-        
+
+
       </div>
 
       {!selectedTalent && (
@@ -438,17 +431,24 @@ const AIDiscoveryEngine = ({ selectedTalent, query, onDealsFound, onSessionCompl
                           <span>Completed in {((agent.processingTime || 0) / 1000).toFixed(1)}s</span>
                         </div>
 
-                        {agent.id === "deal_matcher" && agent.results.dealsFound && (
+                        {agent.id === "deal_matcher" && agent.results.deals_found !== undefined && (
                           <div className="flex items-center gap-2 text-xs">
                             <Target className="w-3 h-3" />
-                            <span>{agent.results.dealsFound} deals found</span>
+                            <span>{agent.results.deals_found} deals found</span>
                           </div>
                         )}
 
-                        {agent.id === "file_processor" && agent.results.documentsProcessed && (
+                        {agent.id === "file_processor" && agent.results.documents_processed !== undefined && (
                           <div className="flex items-center gap-2 text-xs">
                             <FileSearch className="w-3 h-3" />
-                            <span>{agent.results.documentsProcessed} documents processed</span>
+                            <span>{agent.results.documents_processed} documents processed</span>
+                          </div>
+                        )}
+
+                        {agent.id === "opportunity_scorer" && agent.results.high_priority_deals !== undefined && (
+                          <div className="flex items-center gap-2 text-xs">
+                            <TrendingUp className="w-3 h-3" />
+                            <span>{agent.results.high_priority_deals} high-priority deals</span>
                           </div>
                         )}
                       </div>
