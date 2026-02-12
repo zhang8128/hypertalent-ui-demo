@@ -13,7 +13,7 @@ import { Progress } from "@/components/ui/progress"
 import { Mail, Sparkles, Copy, Send, RefreshCw, FileText, Brain, Zap, CheckCircle, Edit3, Trash2 } from "lucide-react"
 import { useState, useEffect } from "react"
 import type { Deal } from "@/types/deal"
-import type { TalentProfile } from "./talent-profile-manager"
+import type { TalentProfile } from "@/types/talent"
 
 interface OutreachTemplate {
   id: string

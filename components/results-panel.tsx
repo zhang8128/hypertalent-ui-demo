@@ -1,10 +1,11 @@
 "use client"
-import { FileText, CheckCircle, History, Loader2, FolderOpen } from "lucide-react"
+import { FileText, CheckCircle, History, Loader2, FolderOpen, Trash2 } from "lucide-react"
 import { useState, useEffect, useCallback } from "react"
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qaqyqok7j0.execute-api.us-east-1.amazonaws.com'
-import { FileUploadZone, type UploadedFile } from "./file-upload-zone"
-import { TalentSelector, type TalentProfile } from "./talent-selector"
+import { apiClient, type TrackedDeal } from '@/services/api-client'
+import { FileUploadZone } from "./file-upload-zone"
+import { TalentSelector } from "./talent-selector"
+import type { TalentProfile, UploadedFile } from "@/types/talent"
 import type { DealFilters as DealFiltersType } from "./deal-filters"
 import { DealDetailsModal } from "./deal-details-modal"
 import { OutreachModal } from "./outreach-modal"
@@ -13,13 +14,16 @@ import { DealEvaluationInterface } from "./deal-evaluation-interface"
 import { AIDealDiscoveryEngine } from "./ai-deal-discovery-engine"
 import { ChatResultsPanel } from "./tools/chat-results-panel"
 import { CrawlerResultsPanel } from "./tools/crawler-results-panel"
-import { GameplanResultsPanel } from "./tools/gameplan-results-panel"
+// GameplanResultsPanel removed - now uses same flow as Deal Hunter with B2B context
 import { SimulationResultsPanel } from "./tools/simulation-results-panel"
 import type { Deal } from "@/types/deal"
 import type { ToolType } from "@/app/page"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 
 interface SavedDealFile {
   filename: string
@@ -29,90 +33,6 @@ interface SavedDealFile {
   prompt: string
   deal_count: number
 }
-
-const mockDeals: Deal[] = [
-  {
-    id: "deal-1",
-    brand: "Nike",
-    title: "Nike Partnership",
-    category: "Athletic Apparel",
-    valueRange: "$50K-100K",
-    matchScore: 9.2,
-    description: "High-value endorsement opportunity for athletic wear and footwear with global reach",
-    tags: ["Sports", "Apparel", "Global"],
-    deadline: "2025-03-15",
-    requirements: ["Social media presence", "Athletic performance", "Brand alignment"],
-    engagement: 4.8,
-    reach: "2.5M",
-    conversions: "3.2%",
-    industry: "Sports & Recreation",
-    companySize: "Large Enterprise",
-    duration: "12 months",
-    startDate: "2025-02-01",
-    contact: {
-      name: "Sarah Johnson",
-      email: "partnerships@nike.com",
-      department: "Global Partnerships",
-    },
-    status: "new",
-    createdAt: "2025-01-15T10:30:00Z",
-    updatedAt: "2025-01-15T10:30:00Z",
-  },
-  {
-    id: "deal-2",
-    brand: "Gatorade",
-    title: "Sports Nutrition Campaign",
-    category: "Sports Nutrition",
-    valueRange: "$25K-50K",
-    matchScore: 8.7,
-    description: "Social media campaign for new product launch targeting athletic performance",
-    tags: ["Nutrition", "Social Media", "Performance"],
-    deadline: "2025-02-28",
-    requirements: ["Athletic endorsement", "Social engagement", "Video content"],
-    engagement: 5.2,
-    reach: "1.8M",
-    conversions: "4.1%",
-    industry: "Food & Beverage",
-    companySize: "Large Enterprise",
-    duration: "6 months",
-    startDate: "2025-01-20",
-    contact: {
-      name: "Mike Chen",
-      email: "marketing@gatorade.com",
-      department: "Brand Marketing",
-    },
-    status: "new",
-    createdAt: "2025-01-15T10:31:00Z",
-    updatedAt: "2025-01-15T10:31:00Z",
-  },
-  {
-    id: "deal-3",
-    brand: "Under Armour",
-    title: "Training Gear Collaboration",
-    category: "Athletic Apparel",
-    valueRange: "$75K-150K",
-    matchScore: 8.9,
-    description: "Exclusive training gear line collaboration with performance testing and feedback",
-    tags: ["Apparel", "Training", "Collaboration"],
-    deadline: "2025-04-01",
-    requirements: ["Product testing", "Feedback sessions", "Marketing content"],
-    engagement: 4.5,
-    reach: "3.1M",
-    conversions: "2.8%",
-    industry: "Sports & Recreation",
-    companySize: "Large Enterprise",
-    duration: "18 months",
-    startDate: "2025-03-01",
-    contact: {
-      name: "Alex Rivera",
-      email: "partnerships@underarmour.com",
-      department: "Athlete Partnerships",
-    },
-    status: "new",
-    createdAt: "2025-01-15T10:32:00Z",
-    updatedAt: "2025-01-15T10:32:00Z",
-  },
-]
 
 interface ResultsPanelProps {
   activeTool: ToolType
@@ -124,6 +44,7 @@ interface ResultsPanelProps {
 
 export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange, selectedTalent: externalTalent, onTalentChange }: ResultsPanelProps) {
   const [localTalent, setLocalTalent] = useState<TalentProfile>()
+  const [chatEntityFilter, setChatEntityFilter] = useState<"talent" | "company">("talent")
 
   // Use external state if callback is provided, otherwise use local state
   const selectedTalent = onTalentChange ? externalTalent : localTalent
@@ -153,6 +74,13 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
   })
   const [discoveryPrompt, setDiscoveryPrompt] = useState("Find brand partnership deals for this talent")
   const [searchDurationMinutes, setSearchDurationMinutes] = useState(1)
+  const [findingContactForDealId, setFindingContactForDealId] = useState<string | undefined>()
+  const [contactNotFoundDealIds, setContactNotFoundDealIds] = useState<Set<string>>(new Set())
+  // Contact finder dialog state
+  const [showContactDialog, setShowContactDialog] = useState(false)
+  const [contactDialogDeal, setContactDialogDeal] = useState<Deal | null>(null)
+  const [rolePrompt, setRolePrompt] = useState("")
+  const DEFAULT_ROLE_PROMPT = "VP of Marketing, Head of Partnerships, or Brand Manager"
 
   useEffect(() => {
     setFiles(sharedFiles)
@@ -177,28 +105,165 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
     localStorage.setItem("hyper-talent-files", JSON.stringify(files))
   }, [files])
 
-  // Load saved deal files when talent changes
+  // Load saved deal files and persisted deals when talent changes
   useEffect(() => {
     if (selectedTalent) {
       loadSavedDealFiles(selectedTalent.id)
+      loadPersistedDeals(selectedTalent.id)
     } else {
       setSavedDealFiles([])
       setDeals([])
     }
   }, [selectedTalent])
 
+  // Load persisted deals from DynamoDB
+  const loadPersistedDeals = async (talentId: string) => {
+    try {
+      const response = await apiClient.getTrackedDeals(talentId)
+      if (response.deals && response.deals.length > 0) {
+        const loadedDeals: Deal[] = response.deals.map((deal: TrackedDeal) => ({
+          id: deal.deal_id,
+          dealId: deal.deal_id,
+          talentId: deal.talent_id,
+          brand: deal.brand || 'Unknown Brand',
+          title: `Partnership with ${deal.brand}`,
+          category: deal.categories?.[0] || deal.industry || 'General',
+          valueRange: deal.budget_range || '',
+          matchScore: deal.match_score || 0,
+          description: deal.match_reasons?.join('. ') || deal.recommended_approach || '',
+          tags: [...(deal.categories || []), ...(deal.deal_types || [])],
+          industry: deal.industry || 'General',
+          website: deal.website || '',
+          duration: deal.timeline || undefined,
+          contact: deal.contact_info ? {
+            name: deal.contact_info.name,
+            email: deal.contact_info.email,
+            department: deal.contact_info.title,
+          } : undefined,
+          apolloContact: deal.contact_info ? {
+            id: deal.contact_info.apollo_id || '',
+            name: deal.contact_info.name || '',
+            title: deal.contact_info.title,
+            email: deal.contact_info.email,
+            phone: deal.contact_info.phone,
+            linkedin_url: deal.contact_info.linkedin_url,
+            confidence_score: parseFloat(deal.contact_info.confidence_score) || 0,
+          } : undefined,
+          status: deal.status === 'potential' ? 'new' : deal.status,
+          createdAt: deal.created_at,
+          updatedAt: deal.updated_at,
+          estimatedValue: deal.estimated_value,
+          successProbability: deal.success_probability,
+          priority: deal.priority,
+          recommendedApproach: deal.recommended_approach,
+        }))
+        setDeals(loadedDeals)
+        setShowDiscoveryEngine(false)
+      }
+    } catch (error) {
+      console.error('Failed to load persisted deals:', error)
+    }
+  }
+
+  // Handle status change from UI
+  const handleStatusChange = async (dealId: string, newStatus: Deal['status']) => {
+    if (!selectedTalent) return
+
+    // Optimistic update
+    setDeals(prevDeals => prevDeals.map(deal =>
+      deal.id === dealId || deal.dealId === dealId
+        ? { ...deal, status: newStatus }
+        : deal
+    ))
+
+    try {
+      // Map frontend status to backend status
+      const backendStatus = newStatus === 'new' ? 'potential' : newStatus
+      await apiClient.updateDealStatus(selectedTalent.id, dealId, backendStatus as any)
+    } catch (error) {
+      console.error('Failed to update deal status:', error)
+      // Revert on error - reload from server
+      loadPersistedDeals(selectedTalent.id)
+    }
+  }
+
+  // Show dialog to optionally enter role prompt before finding contact
+  const handleFindContact = async (deal: Deal) => {
+    if (!selectedTalent) return
+    setContactDialogDeal(deal)
+    setRolePrompt("") // Clear any previous prompt, will use default if empty
+    setShowContactDialog(true)
+  }
+
+  // Execute the actual contact search after dialog confirmation
+  const executeContactSearch = async () => {
+    if (!selectedTalent || !contactDialogDeal) return
+
+    const deal = contactDialogDeal
+    const dealId = deal.dealId || deal.id
+
+    setShowContactDialog(false)
+    setFindingContactForDealId(deal.id)
+
+    try {
+      // Use custom role prompt if provided, otherwise pass undefined to use backend defaults
+      const finalRolePrompt = rolePrompt.trim() || undefined
+
+      const result = await apiClient.findAndSaveContact(
+        selectedTalent.id,
+        dealId,
+        deal.brand,
+        deal.website || undefined,
+        finalRolePrompt
+      )
+
+      if (result.success && result.contact) {
+        // Update local state with the contact info
+        setDeals(prevDeals => prevDeals.map(d =>
+          (d.id === deal.id || d.dealId === dealId)
+            ? {
+                ...d,
+                apolloContact: {
+                  id: result.contact!.id,
+                  name: result.contact!.name,
+                  title: result.contact!.title,
+                  email: result.contact!.email,
+                  phone: result.contact!.phone,
+                  linkedin_url: result.contact!.linkedin_url,
+                  confidence_score: result.contact!.confidence_score,
+                }
+              }
+            : d
+        ))
+        // Clear any previous "not found" state for this deal
+        setContactNotFoundDealIds(prev => {
+          const next = new Set(prev)
+          next.delete(deal.id)
+          return next
+        })
+      } else {
+        // No contact found — mark this deal so the UI shows a message
+        setContactNotFoundDealIds(prev => new Set(prev).add(deal.id))
+      }
+    } catch (error) {
+      console.error('Failed to find contact:', error)
+      // Show error state on the deal card
+      setContactNotFoundDealIds(prev => new Set(prev).add(deal.id))
+    } finally {
+      setFindingContactForDealId(undefined)
+      setContactDialogDeal(null)
+    }
+  }
+
   const loadSavedDealFiles = async (talentId: string) => {
     setIsLoadingSavedDeals(true)
     try {
-      const response = await fetch(`${API_URL}/api/discovery/deals/${talentId}`)
-      if (response.ok) {
-        const data = await response.json()
-        setSavedDealFiles(data.deal_files || [])
+      const data = await apiClient.getSavedDealFiles(talentId)
+      setSavedDealFiles(data.deal_files || [])
 
-        // Auto-load the most recent deal file if available
-        if (data.deal_files && data.deal_files.length > 0) {
-          await loadDealFile(talentId, data.deal_files[0].filename)
-        }
+      // Auto-load the most recent deal file if available
+      if (data.deal_files && data.deal_files.length > 0) {
+        await loadDealFile(talentId, data.deal_files[0].filename)
       }
     } catch (error) {
       console.error('Failed to load saved deal files:', error)
@@ -209,33 +274,35 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
 
   const loadDealFile = async (talentId: string, filename: string) => {
     try {
-      const response = await fetch(`${API_URL}/api/discovery/deals/${talentId}/${filename}`)
-      if (response.ok) {
-        const data = await response.json()
-        // Convert API deals to frontend Deal format
-        const loadedDeals: Deal[] = (data.deals || []).map((deal: any, index: number) => ({
+      const [data, trackedResponse] = await Promise.all([
+        apiClient.loadDealFile(talentId, filename),
+        apiClient.getTrackedDeals(talentId).catch(() => ({ deals: [] as TrackedDeal[] })),
+      ])
+
+      // Build lookups from tracked deals (DynamoDB has richer data than CSV)
+      const trackedByBrand = new Map<string, TrackedDeal>()
+      for (const td of (trackedResponse.deals || [])) {
+        if (td.brand) {
+          trackedByBrand.set(td.brand, td)
+        }
+      }
+
+      // Convert API deals to frontend Deal format, enriching with DynamoDB data
+      const loadedDeals: Deal[] = (data.deals || []).map((deal: any, index: number) => {
+        const tracked = trackedByBrand.get(deal.brand || '')
+        return {
           id: deal.id || `deal-${Date.now()}-${index}`,
+          dealId: tracked?.deal_id,
+          talentId: tracked?.talent_id,
           brand: deal.brand || 'Unknown Brand',
           title: deal.title || `Partnership with ${deal.brand}`,
           category: deal.category || 'General',
-          valueRange: deal.value_range || '$25K-100K',
-          matchScore: parseFloat(deal.match_score) || 7.0,
+          valueRange: deal.value_range || '',
+          matchScore: parseFloat(deal.match_score) || 0,
           description: deal.description || '',
           tags: [deal.category, deal.industry].filter(Boolean),
-          deadline: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          requirements: [],
-          engagement: 4.0,
-          reach: "500K",
-          conversions: `${(parseFloat(deal.success_probability) * 100 || 70).toFixed(0)}%`,
           industry: deal.industry || 'General',
-          companySize: "Enterprise",
-          duration: "3-6 months",
-          startDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          contact: {
-            name: `${deal.brand} Partnership Team`,
-            email: `partnerships@${deal.brand?.toLowerCase().replace(/\\s+/g, '')}.com`,
-            department: "Brand Partnerships",
-          },
+          website: deal.website || tracked?.website || '',
           status: deal.status || "new",
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -243,13 +310,45 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
           successProbability: parseFloat(deal.success_probability) || 0,
           priority: deal.priority || 'Medium',
           recommendedApproach: deal.recommended_approach || '',
-        }))
-        setDeals(loadedDeals)
-        setSelectedSavedFile(filename)
-        setShowDiscoveryEngine(false) // Hide discovery engine when loading saved deals
-      }
+          contact: tracked?.contact_info ? {
+            name: tracked.contact_info.name,
+            email: tracked.contact_info.email,
+            department: tracked.contact_info.title,
+          } : undefined,
+          apolloContact: tracked?.contact_info ? {
+            id: tracked.contact_info.apollo_id || '',
+            name: tracked.contact_info.name || '',
+            title: tracked.contact_info.title,
+            email: tracked.contact_info.email,
+            phone: tracked.contact_info.phone,
+            linkedin_url: tracked.contact_info.linkedin_url,
+            confidence_score: parseFloat(tracked.contact_info.confidence_score) || 0,
+          } : undefined,
+        }
+      })
+      setDeals(loadedDeals)
+      setSelectedSavedFile(filename)
+      setShowDiscoveryEngine(false) // Hide discovery engine when loading saved deals
     } catch (error) {
       console.error('Failed to load deal file:', error)
+    }
+  }
+
+  const handleDeleteSession = async (e: React.MouseEvent, file: SavedDealFile) => {
+    e.stopPropagation() // Don't trigger the card click (load)
+    if (!selectedTalent) return
+
+    try {
+      await apiClient.deleteDealFile(selectedTalent.id, file.filename)
+      setSavedDealFiles(prev => prev.filter(f => f.filename !== file.filename))
+
+      // If the deleted file was currently active, clear deals
+      if (selectedSavedFile === file.filename) {
+        setSelectedSavedFile(null)
+        setDeals([])
+      }
+    } catch (error) {
+      console.error('Failed to delete session:', error)
     }
   }
 
@@ -264,54 +363,88 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
     setIsDiscovering(true)
   }
 
+  // Handle a single deal arriving from the stream
+  const handleDealFound = useCallback((deal: Deal) => {
+    setDeals(prev => [...prev, deal])
+  }, [])
+
   const handleDiscoveryComplete = useCallback(async (discoveredDeals: Deal[]) => {
-    setDeals(discoveredDeals)
+    // Don't setDeals here — state is already populated incrementally via handleDealFound.
+    // discoveredDeals is the final list used only for persistence below.
     setIsDiscovering(false)
     setIsProcessing(false)
 
-    // Save deals as CSV to S3
-    if (selectedTalent && discoveredDeals.length > 0) {
-      try {
-        const response = await fetch(`${API_URL}/api/discovery/save-deals`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            talent_id: selectedTalent.id,
-            talent_name: selectedTalent.name,
-            prompt: discoveryPrompt,
-            deals: discoveredDeals.map(deal => ({
-              id: deal.id,
-              brand: deal.brand,
-              title: deal.title,
-              category: deal.category,
-              value_range: deal.valueRange,
-              match_score: deal.matchScore,
-              description: deal.description,
-              industry: deal.industry,
-              status: deal.status,
-              priority: (deal as any).priority || 'Medium',
-              estimated_value: (deal as any).estimatedValue || 0,
-              success_probability: (deal as any).successProbability || 0,
-              recommended_approach: (deal as any).recommendedApproach || '',
-            }))
-          })
-        })
+    if (!selectedTalent || discoveredDeals.length === 0) return
 
-        if (response.ok) {
-          const result = await response.json()
-          console.log('Deals saved to S3:', result)
-          // Reload saved deal files to show the new one
-          await loadSavedDealFiles(selectedTalent.id)
-          setSelectedSavedFile(result.filename)
-        }
-      } catch (error) {
-        console.error('Failed to save deals to S3:', error)
-      }
+    // Persist to DynamoDB first to get deal_ids
+    let dealIds: string[] = []
+    try {
+      const persistResult = await apiClient.persistDeals(
+        selectedTalent.id,
+        discoveredDeals.map(deal => ({
+          id: deal.id,
+          brand: deal.brand,
+          industry: deal.industry,
+          match_score: deal.matchScore,
+          deal_types: deal.tags?.filter(t => ['Sponsorship', 'Endorsement', 'Campaign', 'Brand Ambassador', 'Content Creation', 'Product Placement', 'Channel Partnership', 'Co-marketing', 'Technology Integration', 'Distribution Agreement', 'Joint Venture', 'OEM/Reseller'].includes(t)) || [],
+          budget_range: deal.valueRange,
+          categories: deal.tags?.slice(0, 5) || [],
+          match_reasons: deal.description ? [deal.description.split('.')[0]] : [],
+          website: deal.website || '',
+          recommended_approach: (deal as any).recommendedApproach || '',
+          estimated_value: (deal as any).estimatedValue || 0,
+          success_probability: (deal as any).successProbability || 0,
+          priority: (deal as any).priority || 'Medium',
+          timeline: deal.duration || '4-8 weeks',
+        }))
+      )
+      dealIds = persistResult.deal_ids || []
+    } catch (persistError) {
+      console.error('Failed to persist deals:', persistError)
+    }
+
+    // Update deals with persisted IDs
+    if (dealIds.length > 0) {
+      setDeals(prev => prev.map((deal, index) => ({
+        ...deal,
+        id: dealIds[index] || deal.id,
+        dealId: dealIds[index] || deal.id,
+        talentId: selectedTalent.id,
+      })))
+    }
+
+    // Save deals as CSV to S3
+    try {
+      const result = await apiClient.saveDeals(
+        selectedTalent.id,
+        selectedTalent.name,
+        discoveryPrompt,
+        discoveredDeals.map(deal => ({
+          id: deal.id,
+          brand: deal.brand,
+          title: deal.title,
+          category: deal.category,
+          value_range: deal.valueRange,
+          match_score: deal.matchScore,
+          description: deal.description,
+          industry: deal.industry,
+          website: deal.website || '',
+          status: deal.status,
+          priority: (deal as any).priority || 'Medium',
+          estimated_value: (deal as any).estimatedValue || 0,
+          success_probability: (deal as any).successProbability || 0,
+          recommended_approach: (deal as any).recommendedApproach || '',
+        }))
+      )
+      // Reload saved deal files to show the new one
+      await loadSavedDealFiles(selectedTalent.id)
+      setSelectedSavedFile(result.filename)
+    } catch (error) {
+      console.error('Failed to save deals to S3:', error)
     }
   }, [selectedTalent, discoveryPrompt])
 
-  const handleSessionComplete = (session: any) => {
-    console.log("Discovery session completed:", session)
+  const handleSessionComplete = (_session: any) => {
     setIsDiscovering(false)
   }
 
@@ -332,11 +465,20 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
     setIsDiscovering(true)
   }
 
-  const availableCategories = Array.from(new Set(mockDeals.map((deal) => deal.category)))
-  const availableTags = Array.from(new Set(mockDeals.flatMap((deal) => deal.tags)))
+  const availableCategories = Array.from(new Set(deals.map((deal) => deal.category)))
+  const availableTags = Array.from(new Set(deals.flatMap((deal) => deal.tags)))
+
+  const [detailsInitialTab, setDetailsInitialTab] = useState("overview")
 
   const handleViewDetails = (deal: Deal) => {
     setSelectedDeal(deal)
+    setDetailsInitialTab("overview")
+    setShowDetailsModal(true)
+  }
+
+  const handleViewContact = (deal: Deal) => {
+    setSelectedDeal(deal)
+    setDetailsInitialTab("contact")
     setShowDetailsModal(true)
   }
 
@@ -368,10 +510,10 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
           title: "Market Intelligence Terminal",
           subtitle: "Real-time brand opportunity discovery",
         }
-      case "gameplan":
+      case "gameplanx":
         return {
-          title: "Strategic Planning Terminal",
-          subtitle: "Campaign strategy and execution planning",
+          title: "B2B Partner Discovery Terminal",
+          subtitle: "Find and evaluate strategic partnership opportunities",
         }
       case "simulation":
         return {
@@ -397,13 +539,19 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
 
     switch (activeTool) {
       case "chat":
-        return <ChatResultsPanel {...commonProps} />
+        return (
+          <ChatResultsPanel
+            {...commonProps}
+            entityFilter={chatEntityFilter}
+            onEntityFilterChange={setChatEntityFilter}
+            deals={deals}
+          />
+        )
       case "crawler":
         return <CrawlerResultsPanel {...commonProps} />
-      case "gameplan":
-        return <GameplanResultsPanel {...commonProps} />
       case "simulation":
         return <SimulationResultsPanel {...commonProps} />
+      case "gameplanx":
       case "deal-hunter":
       default:
         return (
@@ -415,7 +563,7 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
                       <History className="w-4 h-4" />
-                      <h4 className="font-medium text-sm">Saved Discovery Sessions</h4>
+                      <h4 className="font-medium text-sm">{contextLabels.sessionLabel}</h4>
                       <Badge variant="outline" className="text-xs">
                         {savedDealFiles.length} sessions
                       </Badge>
@@ -447,8 +595,17 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
                             </p>
                           </div>
                         </div>
-                        <div className="text-xs text-muted-foreground">
-                          {new Date(file.last_modified).toLocaleDateString()}
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(file.last_modified).toLocaleDateString()}
+                          </span>
+                          <button
+                            onClick={(e) => handleDeleteSession(e, file)}
+                            className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                            title="Delete session"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -476,6 +633,8 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
                   selectedTalent={selectedTalent}
                   query={discoveryPrompt}
                   searchDurationMinutes={searchDurationMinutes}
+                  entityType={contextLabels.entityFilter}
+                  onDealFound={handleDealFound}
                   onDealsFound={handleDiscoveryComplete}
                   onSessionComplete={handleSessionComplete}
                 />
@@ -487,11 +646,16 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
                 deals={deals}
                 selectedTalent={selectedTalent}
                 onViewDetails={handleViewDetails}
+                onViewContact={handleViewContact}
                 onGenerateOutreach={handleGenerateOutreach}
                 onExportDeals={(dealsToExport) => {
                   setFilteredDeals(dealsToExport)
                   setShowExportModal(true)
                 }}
+                onStatusChange={handleStatusChange}
+                onFindContact={handleFindContact}
+                findingContactForDealId={findingContactForDealId}
+                contactNotFoundDealIds={contactNotFoundDealIds}
               />
             )}
           </>
@@ -499,10 +663,50 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
     }
   }
 
+  // Get context labels based on tool type
+  const getContextLabels = () => {
+    if (activeTool === "gameplanx") {
+      return {
+        entityType: "Company",
+        entityTypePlural: "Companies",
+        entityFilter: "company" as const,
+        searchLabel: "Find B2B Partners",
+        defaultPrompt: "Find strategic B2B partners for this company",
+        resultLabel: "Partnership Opportunities",
+        sessionLabel: "Saved Partnership Sessions",
+      }
+    }
+    if (activeTool === "chat") {
+      const isCompany = chatEntityFilter === "company"
+      return {
+        entityType: isCompany ? "Company" : "Talent",
+        entityTypePlural: isCompany ? "Companies" : "Talents",
+        entityFilter: chatEntityFilter,
+        searchLabel: isCompany ? "Find B2B Partners" : "Find Brand Deals",
+        defaultPrompt: isCompany
+          ? "Find strategic B2B partners for this company"
+          : "Find brand partnership deals for this talent",
+        resultLabel: isCompany ? "Partnership Opportunities" : "Deal Opportunities",
+        sessionLabel: isCompany ? "Saved Partnership Sessions" : "Saved Discovery Sessions",
+      }
+    }
+    return {
+      entityType: "Talent",
+      entityTypePlural: "Talents",
+      entityFilter: "talent" as const,
+      searchLabel: "Find Brand Deals",
+      defaultPrompt: "Find brand partnership deals for this talent",
+      resultLabel: "Deal Opportunities",
+      sessionLabel: "Saved Discovery Sessions",
+    }
+  }
+
+  const contextLabels = getContextLabels()
+
   const renderToolSpecificPanel = () => {
     const completedFiles = files.filter((f) => f.status === "completed")
 
-    if (activeTool === "deal-hunter") {
+    if (activeTool === "deal-hunter" || activeTool === "gameplanx") {
       return (
         <>
           <div className="bg-secondary/20 border border-border/50 rounded-lg p-8 border-none py-0">
@@ -510,13 +714,16 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
               <TalentSelector
                 selectedTalent={selectedTalent}
                 onTalentChange={setSelectedTalent}
-                onCreateNew={() => console.log("Create new talent")}
+                onCreateNew={() => {}}
                 onStartDiscovery={handleStartDiscovery}
                 isDiscovering={isDiscovering}
+                contextLabel={contextLabels.entityType}
+                defaultPrompt={contextLabels.defaultPrompt}
+                entityFilter={contextLabels.entityFilter}
               />
             </div>
 
-            
+
           </div>
 
           {/* Tool-Specific Results Section */}
@@ -532,9 +739,12 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
           <TalentSelector
             selectedTalent={selectedTalent}
             onTalentChange={setSelectedTalent}
-            onCreateNew={() => console.log("Create new talent")}
+            onCreateNew={() => {}}
             onStartDiscovery={handleStartDiscovery}
             isDiscovering={isDiscovering}
+            contextLabel={contextLabels.entityType}
+            defaultPrompt={contextLabels.defaultPrompt}
+            entityFilter={contextLabels.entityFilter}
           />
         </div>
 
@@ -591,6 +801,7 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
         isOpen={showDetailsModal}
         onClose={() => setShowDetailsModal(false)}
         onGenerateOutreach={handleGenerateOutreach}
+        initialTab={detailsInitialTab}
       />
 
       <OutreachModal
@@ -607,6 +818,40 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
         talent={selectedTalent}
         files={files}
       />
+
+      {/* Contact Finder Dialog with optional role prompt */}
+      <Dialog open={showContactDialog} onOpenChange={setShowContactDialog}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Find Partnership Contact</DialogTitle>
+            <DialogDescription>
+              Search for the best contact at <span className="font-semibold">{contactDialogDeal?.brand}</span> for partnership outreach.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="rolePrompt">Role/Position (optional)</Label>
+              <Input
+                id="rolePrompt"
+                placeholder={DEFAULT_ROLE_PROMPT}
+                value={rolePrompt}
+                onChange={(e) => setRolePrompt(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Leave empty to use default search, or specify a role like "Chief Brand Ambassador" or "Media Manager for women's sportswear division"
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowContactDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={executeContactSearch}>
+              Find Contact
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

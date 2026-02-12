@@ -20,17 +20,32 @@ import {
   SortAsc,
   SortDesc,
   Search,
+  Clock,
+  MessageCircle,
+  CheckCircle2,
+  XCircle,
+  User,
+  Linkedin,
+  Phone,
+  Loader2,
+  UserSearch,
+  ExternalLink,
 } from "lucide-react"
 import { useState, useMemo } from "react"
 import type { Deal } from "@/types/deal"
-import type { TalentProfile } from "./talent-profile-manager"
+import type { TalentProfile } from "@/types/talent"
 
 interface DealEvaluationInterfaceProps {
   deals: Deal[]
   selectedTalent?: TalentProfile
   onViewDetails: (deal: Deal) => void
+  onViewContact?: (deal: Deal) => void
   onGenerateOutreach: (deal: Deal) => void
   onExportDeals: (deals: Deal[]) => void
+  onStatusChange?: (dealId: string, status: Deal['status']) => void
+  onFindContact?: (deal: Deal) => Promise<void>
+  findingContactForDealId?: string  // Track which deal is currently being enriched
+  contactNotFoundDealIds?: Set<string>  // Deals where contact search returned no results
 }
 
 interface EvaluationFilters {
@@ -59,8 +74,13 @@ export function DealEvaluationInterface({
   deals,
   selectedTalent,
   onViewDetails,
+  onViewContact,
   onGenerateOutreach,
   onExportDeals,
+  onStatusChange,
+  onFindContact,
+  findingContactForDealId,
+  contactNotFoundDealIds,
 }: DealEvaluationInterfaceProps) {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid")
   const [activeTab, setActiveTab] = useState("deals")
@@ -240,6 +260,50 @@ export function DealEvaluationInterface({
     return "outline"
   }
 
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case "new":
+      case "potential":
+        return "bg-blue-500/20 text-blue-400 border-blue-500/30"
+      case "contacted":
+        return "bg-yellow-500/20 text-yellow-400 border-yellow-500/30"
+      case "negotiating":
+        return "bg-orange-500/20 text-orange-400 border-orange-500/30"
+      case "closed":
+        return "bg-green-500/20 text-green-400 border-green-500/30"
+      case "rejected":
+        return "bg-red-500/20 text-red-400 border-red-500/30"
+      default:
+        return "bg-gray-500/20 text-gray-400 border-gray-500/30"
+    }
+  }
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case "new":
+      case "potential":
+        return <Clock className="w-3 h-3" />
+      case "contacted":
+        return <Mail className="w-3 h-3" />
+      case "negotiating":
+        return <MessageCircle className="w-3 h-3" />
+      case "closed":
+        return <CheckCircle2 className="w-3 h-3" />
+      case "rejected":
+        return <XCircle className="w-3 h-3" />
+      default:
+        return <Clock className="w-3 h-3" />
+    }
+  }
+
+  const statusOptions = [
+    { value: "potential", label: "Potential" },
+    { value: "contacted", label: "Contacted" },
+    { value: "negotiating", label: "Negotiating" },
+    { value: "closed", label: "Closed" },
+    { value: "rejected", label: "Rejected" },
+  ]
+
   const availableCategories = Array.from(new Set(deals.map((deal) => deal.category)))
   const availableTags = Array.from(new Set(deals.flatMap((deal) => deal.tags)))
 
@@ -346,26 +410,77 @@ export function DealEvaluationInterface({
                       <h4 className="font-semibold text-sm">{deal.brand}</h4>
                       <p className="text-xs text-muted-foreground">{deal.title}</p>
                     </div>
+                    {/* Status Badge/Dropdown */}
+                    {onStatusChange ? (
+                      <Select
+                        value={deal.status || "potential"}
+                        onValueChange={(value) => onStatusChange(deal.id, value as Deal['status'])}
+                      >
+                        <SelectTrigger className={`w-32 h-7 text-xs ${getStatusColor(deal.status || "potential")}`}>
+                          <div className="flex items-center gap-1">
+                            {getStatusIcon(deal.status || "potential")}
+                            <SelectValue />
+                          </div>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {statusOptions.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              <div className="flex items-center gap-2">
+                                {getStatusIcon(option.value)}
+                                {option.label}
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Badge variant="outline" className={`text-xs ${getStatusColor(deal.status || "potential")}`}>
+                        {getStatusIcon(deal.status || "potential")}
+                        <span className="ml-1">{(deal.status || "potential").charAt(0).toUpperCase() + (deal.status || "potential").slice(1)}</span>
+                      </Badge>
+                    )}
                   </div>
 
                   {/* Metrics */}
-                  <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="grid grid-cols-3 gap-2 text-xs">
                     <div className="flex items-center gap-1">
-                      <DollarSign className="w-3 h-3 text-foreground flex-col" />
+                      <DollarSign className="w-3 h-3 text-foreground" />
                       <span style={{ color: "#AE94FB" }} className="font-semibold text-sm">
                         {deal.valueRange}
                       </span>
                     </div>
                     <div className="flex items-center gap-1">
-                      <TrendingUp className="w-3 h-3 text-blue-500" />
+                      <Target className="w-3 h-3 text-green-500" />
                       <span style={{ color: "#AE94FB" }} className="font-semibold text-sm">
-                        {deal.engagement}%
+                        {deal.matchScore.toFixed(1)}
                       </span>
+                      <span className="text-muted-foreground">/10</span>
                     </div>
+                    {(deal as any).priority && (
+                      <div className="flex items-center gap-1">
+                        <TrendingUp className="w-3 h-3 text-blue-500" />
+                        <span className="font-medium text-sm text-muted-foreground">
+                          {(deal as any).priority}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Description */}
                   <p className="text-xs text-muted-foreground line-clamp-2">{deal.description}</p>
+
+                  {/* Website Link */}
+                  {deal.website && (
+                    <a
+                      href={deal.website.startsWith('http') ? deal.website : `https://${deal.website}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      Visit website
+                    </a>
+                  )}
 
                   {/* Tags */}
                   <div className="flex flex-wrap gap-1">
@@ -380,6 +495,79 @@ export function DealEvaluationInterface({
                       </Badge>
                     )}
                   </div>
+
+                  {/* Apollo Contact */}
+                  {deal.apolloContact ? (
+                    <div
+                      className="bg-secondary/50 rounded-lg p-2 space-y-1 cursor-pointer hover:bg-secondary/80 transition-colors"
+                      onClick={() => (onViewContact || onViewDetails)(deal)}
+                    >
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2">
+                          <User className="w-3 h-3 text-green-500" />
+                          <span className="font-medium">{deal.apolloContact.name}</span>
+                        </div>
+                        {deal.apolloContact.confidence_score > 0 && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-green-500/10 text-green-500 border-green-500/30">
+                            Score: {deal.apolloContact.confidence_score.toFixed(0)}
+                          </Badge>
+                        )}
+                      </div>
+                      {deal.apolloContact.title && (
+                        <p className="text-xs text-muted-foreground pl-5">{deal.apolloContact.title}</p>
+                      )}
+                      <div className="flex flex-wrap items-center gap-2 pl-5">
+                        {deal.apolloContact.email && (
+                          <a href={`mailto:${deal.apolloContact.email}`} onClick={(e) => e.stopPropagation()} className="text-xs text-primary hover:underline flex items-center gap-1">
+                            <Mail className="w-3 h-3" />
+                            Email
+                          </a>
+                        )}
+                        {deal.apolloContact.phone && (
+                          <a href={`tel:${deal.apolloContact.phone}`} onClick={(e) => e.stopPropagation()} className="text-xs text-primary hover:underline flex items-center gap-1">
+                            <Phone className="w-3 h-3" />
+                            {deal.apolloContact.phone}
+                          </a>
+                        )}
+                        {deal.apolloContact.linkedin_url && (
+                          <a href={deal.apolloContact.linkedin_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-xs text-blue-400 hover:underline flex items-center gap-1">
+                            <Linkedin className="w-3 h-3" />
+                            LinkedIn
+                          </a>
+                        )}
+                        {!deal.apolloContact.email && !deal.apolloContact.phone && !deal.apolloContact.linkedin_url && (
+                          <span className="text-xs text-muted-foreground italic">Click for details</span>
+                        )}
+                      </div>
+                    </div>
+                  ) : onFindContact ? (
+                    <div className="space-y-1.5">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onFindContact(deal)}
+                        disabled={findingContactForDealId === deal.id}
+                        className="w-full text-xs"
+                      >
+                        {findingContactForDealId === deal.id ? (
+                          <>
+                            <Loader2 className="w-3 h-3 mr-2 animate-spin" />
+                            Finding contact...
+                          </>
+                        ) : (
+                          <>
+                            <UserSearch className="w-3 h-3 mr-2" />
+                            {contactNotFoundDealIds?.has(deal.id) ? "Try again" : "Find partnership contact"}
+                          </>
+                        )}
+                      </Button>
+                      {contactNotFoundDealIds?.has(deal.id) && findingContactForDealId !== deal.id && (
+                        <p className="text-xs text-muted-foreground text-center px-2">
+                          No contact found for {deal.brand}. Try specifying a different role.
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
 
                   {/* Actions */}
                   <div className="flex gap-1 sm:gap-2 mt-auto">

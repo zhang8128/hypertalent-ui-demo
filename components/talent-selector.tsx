@@ -16,10 +16,6 @@ import {
   Upload,
   X,
   RefreshCw,
-  FileText,
-  ImageIcon,
-  Video,
-  FileSpreadsheet,
   AlertCircle,
   CheckCircle,
   Loader2,
@@ -36,34 +32,12 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { TalentProfileModal } from "./talent-profile-modal"
+import { apiClient } from "@/services/api-client"
+import type { TalentProfile, UploadedFile } from "@/types/talent"
+import { ACCEPTED_TYPES, MAX_FILE_SIZE } from "@/lib/upload-constants"
+import { uploadFileToS3, formatFileSize, getFileIcon } from "@/lib/s3-upload"
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qaqyqok7j0.execute-api.us-east-1.amazonaws.com'
-
-export interface UploadedFile {
-  id: string
-  name: string
-  size: number
-  type: string
-  status: "uploading" | "completed" | "error" | "processing"
-  progress: number
-  url?: string
-  error?: string
-  talentId?: string
-  fileKey?: string
-}
-
-export interface TalentProfile {
-  id: string
-  name: string
-  category: string
-  avatar?: string
-  stats: {
-    followers: number
-    engagement: number
-    deals: number
-  }
-  status: "active" | "inactive" | string
-}
+export type { TalentProfile, UploadedFile }
 
 interface TalentSelectorProps {
   selectedTalent?: TalentProfile
@@ -72,21 +46,10 @@ interface TalentSelectorProps {
   onStartDiscovery?: (prompt: string, searchDurationMinutes: number) => void
   isDiscovering?: boolean
   onFilesChange?: (files: UploadedFile[]) => void
+  contextLabel?: string  // "Talent" or "Company" for B2B context
+  defaultPrompt?: string  // Default prompt text for discovery
+  entityFilter?: "talent" | "company"  // Filter to show only talents or companies (both always shown)
 }
-
-const ACCEPTED_TYPES = {
-  "application/pdf": [".pdf"],
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
-  "application/vnd.ms-excel": [".xls"],
-  "application/msword": [".doc"],
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
-  "text/plain": [".txt"],
-  "text/csv": [".csv"],
-  "image/*": [".jpg", ".jpeg", ".png", ".gif", ".webp"],
-  "video/*": [".mp4", ".mov", ".avi", ".mkv"],
-}
-
-const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB
 
 export function TalentSelector({
   selectedTalent,
@@ -95,6 +58,9 @@ export function TalentSelector({
   onStartDiscovery,
   isDiscovering,
   onFilesChange,
+  contextLabel = "Talent",
+  defaultPrompt = "Find brand partnership deals for this talent",
+  entityFilter = "talent",
 }: TalentSelectorProps) {
   const [talents, setTalents] = useState<TalentProfile[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -102,6 +68,7 @@ export function TalentSelector({
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [newTalentName, setNewTalentName] = useState("")
   const [newTalentCategory, setNewTalentCategory] = useState("Creator")
+  const [newEntityType, setNewEntityType] = useState<"talent" | "company">("talent")
   const [files, setFiles] = useState<UploadedFile[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
   const [showProfileModal, setShowProfileModal] = useState(false)
@@ -123,30 +90,33 @@ export function TalentSelector({
   const loadTalents = async () => {
     setIsLoading(true)
     try {
-      const response = await fetch(`${API_URL}/api/talents`)
-      if (response.ok) {
-        const data = await response.json()
-        // Map API response to component interface
-        const mappedTalents = (data.talents || []).map((t: any) => ({
-          id: t.id,
-          name: t.name,
-          category: t.category,
-          avatar: t.avatar,
-          stats: {
-            followers: t.stats?.followers || 0,
-            engagement: t.stats?.engagement || 0,
-            deals: t.stats?.deals || 0,
-          },
-          status: t.status || 'active',
-        }))
-        setTalents(mappedTalents)
-      }
+      const data = await apiClient.getTalents()
+      // Map API response to component interface
+      const mappedTalents = (data.talents || []).map((t: any) => ({
+        id: t.id,
+        name: t.name,
+        category: t.category,
+        avatar: t.avatar,
+        stats: {
+          followers: t.stats?.followers || 0,
+          engagement: t.stats?.engagement || 0,
+          deals: t.stats?.deals || 0,
+        },
+        status: t.status || 'active',
+        type: t.type || 'talent',  // Default to talent for backwards compatibility
+      }))
+      setTalents(mappedTalents)
     } catch (error) {
       console.error('Failed to load talents:', error)
     } finally {
       setIsLoading(false)
     }
   }
+
+  // Filter talents strictly by entityFilter
+  const filteredTalents = talents.filter(t =>
+    t.type === entityFilter
+  )
 
   const formatNumber = (num: number) => {
     if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`
@@ -163,6 +133,7 @@ export function TalentSelector({
   }
 
   const handleCreateNew = () => {
+    setNewEntityType(entityFilter)  // Default to current context
     setShowCreateDialog(true)
   }
 
@@ -175,7 +146,6 @@ export function TalentSelector({
 
   const handleOpenProfile = (e: React.MouseEvent) => {
     e.stopPropagation()
-    console.log('Opening profile modal for:', selectedTalent?.name)
     if (selectedTalent) {
       setShowProfileModal(true)
     }
@@ -186,59 +156,37 @@ export function TalentSelector({
 
     setIsCreating(true)
     try {
-      const response = await fetch(`${API_URL}/api/talents`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: newTalentName.trim(),
-          category: newTalentCategory,
-        })
+      const newTalent = await apiClient.createTalent({
+        name: newTalentName.trim(),
+        category: newTalentCategory,
+        type: newEntityType,
       })
 
-      if (response.ok) {
-        const newTalent = await response.json()
-        // Map to component interface
-        const mappedTalent: TalentProfile = {
-          id: newTalent.id,
-          name: newTalent.name,
-          category: newTalent.category,
-          avatar: newTalent.avatar,
-          stats: {
-            followers: newTalent.stats?.followers || 0,
-            engagement: newTalent.stats?.engagement || 0,
-            deals: newTalent.stats?.deals || 0,
-          },
-          status: newTalent.status || 'active',
-        }
-        setTalents(prev => [...prev, mappedTalent])
-        onTalentChange(mappedTalent)
-        setShowCreateDialog(false)
-        setNewTalentName("")
-        setNewTalentCategory("Creator")
-      } else {
-        console.error('Failed to create talent')
+      // Map to component interface
+      const mappedTalent: TalentProfile = {
+        id: newTalent.id,
+        name: newTalent.name,
+        category: newTalent.category,
+        avatar: newTalent.avatar,
+        stats: {
+          followers: newTalent.stats?.followers || 0,
+          engagement: newTalent.stats?.engagement || 0,
+          deals: newTalent.stats?.deals || 0,
+        },
+        status: newTalent.status || 'active',
+        type: newTalent.type || newEntityType,
       }
+      setTalents(prev => [...prev, mappedTalent])
+      onTalentChange(mappedTalent)
+      setShowCreateDialog(false)
+      setNewTalentName("")
+      setNewTalentCategory("Creator")
+      setNewEntityType(entityFilter)
     } catch (error) {
       console.error('Failed to create talent:', error)
     } finally {
       setIsCreating(false)
     }
-  }
-
-  const getFileIcon = (type: string) => {
-    if (type.includes("pdf")) return <FileText className="w-4 h-4" />
-    if (type.includes("sheet") || type.includes("excel")) return <FileSpreadsheet className="w-4 h-4" />
-    if (type.includes("image")) return <ImageIcon className="w-4 h-4" />
-    if (type.includes("video")) return <Video className="w-4 h-4" />
-    return <FileText className="w-4 h-4" />
-  }
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return "0 Bytes"
-    const k = 1024
-    const sizes = ["Bytes", "KB", "MB", "GB"]
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
   }
 
   const validateFile = (file: File): string | null => {
@@ -265,66 +213,34 @@ export function TalentSelector({
     if (!selectedTalent) return
 
     try {
-      // 1. Get presigned URL from backend
-      const presignedResponse = await fetch(`${API_URL}/api/talents/${selectedTalent.id}/docs/upload-url`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: uploadFile.name,
-          content_type: uploadFile.type || 'application/octet-stream',
-        })
-      })
+      const presignedData = await apiClient.getTalentDocUploadUrl(
+        selectedTalent.id,
+        uploadFile.name,
+        uploadFile.type || 'application/octet-stream'
+      )
 
-      if (!presignedResponse.ok) {
-        throw new Error('Failed to get upload URL')
-      }
-
-      const presignedData = await presignedResponse.json()
-
-      // 2. Upload file directly to S3 using presigned POST
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest()
-
-        xhr.upload.addEventListener('progress', (event) => {
-          if (event.lengthComputable) {
-            const progress = (event.loaded / event.total) * 100
-            setFiles(prev => prev.map((f) => (f.id === uploadFile.id ? { ...f, progress } : f)))
-          }
-        })
-
-        xhr.addEventListener('load', () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            setFiles(prev =>
-              prev.map((f) =>
-                f.id === uploadFile.id
-                  ? {
-                      ...f,
-                      status: "completed" as const,
-                      progress: 100,
-                      url: presignedData.public_url,
-                      fileKey: presignedData.file_key
-                    }
-                  : f,
-              ),
-            )
-            resolve()
-          } else {
-            reject(new Error(`Upload failed with status ${xhr.status}`))
-          }
-        })
-
-        xhr.addEventListener('error', () => {
-          reject(new Error('Upload failed'))
-        })
-
-        const formData = new FormData()
-        Object.entries(presignedData.fields).forEach(([key, value]) => {
-          formData.append(key, value as string)
-        })
-        formData.append('file', originalFile)
-
-        xhr.open('POST', presignedData.upload_url)
-        xhr.send(formData)
+      uploadFileToS3(presignedData, originalFile, {
+        onProgress: (progress) => {
+          setFiles(prev => prev.map((f) => (f.id === uploadFile.id ? { ...f, progress } : f)))
+        },
+        onSuccess: (data) => {
+          setFiles(prev =>
+            prev.map((f) =>
+              f.id === uploadFile.id
+                ? { ...f, status: "completed" as const, progress: 100, url: data.public_url, fileKey: data.file_key }
+                : f,
+            ),
+          )
+        },
+        onError: (error) => {
+          setFiles(prev =>
+            prev.map((f) =>
+              f.id === uploadFile.id
+                ? { ...f, status: "error" as const, error: error.message }
+                : f,
+            ),
+          )
+        },
       })
     } catch (error) {
       setFiles(prev =>
@@ -334,7 +250,6 @@ export function TalentSelector({
             : f,
         ),
       )
-      throw error
     }
   }
 
@@ -420,9 +335,7 @@ export function TalentSelector({
     // If file was uploaded to S3, delete it
     if (file?.fileKey && file.status === "completed" && selectedTalent) {
       try {
-        await fetch(`${API_URL}/api/talents/${selectedTalent.id}/docs/${encodeURIComponent(file.fileKey)}`, {
-          method: 'DELETE'
-        })
+        await apiClient.deleteTalentDoc(selectedTalent.id, file.fileKey)
       } catch (error) {
         console.error('Failed to delete file from S3:', error)
       }
@@ -451,7 +364,7 @@ export function TalentSelector({
   return (
     <div className="space-y-4 py-[16] mx-4 px-6">
       <div className="flex items-center justify-between">
-        <h4 className="text-sm font-medium">Selected Talent</h4>
+        <h4 className="text-sm font-medium">Selected {contextLabel}</h4>
         <div className="flex gap-2">
           <Button
             variant="ghost"
@@ -480,18 +393,18 @@ export function TalentSelector({
         <div className="flex items-center justify-center p-4">
           <Loader2 className="w-5 h-5 animate-spin" />
         </div>
-      ) : talents.length === 0 ? (
+      ) : filteredTalents.length === 0 ? (
         <Card className="p-4 text-center">
           <User className="w-6 h-6 mx-auto mb-2 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">No talents yet. Create one to get started.</p>
+          <p className="text-sm text-muted-foreground">No {contextLabel.toLowerCase()}s yet. Create one to get started.</p>
         </Card>
       ) : (
         <Select value={selectedTalent?.id} onValueChange={handleTalentSelect}>
           <SelectTrigger>
-            <SelectValue placeholder="Select a talent profile" />
+            <SelectValue placeholder={`Select a ${contextLabel.toLowerCase()} profile`} />
           </SelectTrigger>
           <SelectContent>
-            {talents.map((talent) => (
+            {filteredTalents.map((talent) => (
               <SelectItem key={talent.id} value={talent.id}>
                 <div className="flex items-center gap-2">
                   <div className="w-6 h-6 bg-primary/20 rounded-full flex items-center justify-center">
@@ -649,7 +562,7 @@ export function TalentSelector({
                 </Label>
                 <Input
                   id="discovery-prompt"
-                  placeholder="e.g., Find me some shoe brands to partner with..."
+                  placeholder={contextLabel === "Company" ? "e.g., Find strategic partners in the fintech space..." : "e.g., Find me some shoe brands to partner with..."}
                   value={discoveryPrompt}
                   onChange={(e) => setDiscoveryPrompt(e.target.value)}
                   onKeyDown={(e) => {
@@ -660,7 +573,7 @@ export function TalentSelector({
                   disabled={isDiscovering}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Describe what kind of brand partnerships you're looking for
+                  {contextLabel === "Company" ? "Describe what kind of strategic partnerships you're looking for" : "Describe what kind of brand partnerships you're looking for"}
                 </p>
               </div>
               <div className="space-y-2">
@@ -688,7 +601,7 @@ export function TalentSelector({
                 </div>
               </div>
               <Button
-                onClick={() => onStartDiscovery(discoveryPrompt || "Find brand partnership deals for this talent", searchDurationMinutes)}
+                onClick={() => onStartDiscovery(discoveryPrompt || defaultPrompt, searchDurationMinutes)}
                 disabled={isDiscovering}
                 className="w-full gap-2 bg-[#AE94FB] hover:bg-[#9B7EF7] text-black font-medium"
                 size="sm"
@@ -705,9 +618,9 @@ export function TalentSelector({
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
-            <DialogTitle>Create New Talent</DialogTitle>
+            <DialogTitle>Create New {contextLabel}</DialogTitle>
             <DialogDescription>
-              Add a new talent profile. You can add more details later.
+              Add a new {contextLabel.toLowerCase()} profile. You can add more details later.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
@@ -715,7 +628,7 @@ export function TalentSelector({
               <Label htmlFor="name">Name</Label>
               <Input
                 id="name"
-                placeholder="Enter talent name"
+                placeholder={`Enter ${contextLabel.toLowerCase()} name`}
                 value={newTalentName}
                 onChange={(e) => setNewTalentName(e.target.value)}
                 onKeyDown={(e) => {
@@ -732,13 +645,27 @@ export function TalentSelector({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Creator">Creator</SelectItem>
-                  <SelectItem value="Influencer">Influencer</SelectItem>
-                  <SelectItem value="Athlete">Athlete</SelectItem>
-                  <SelectItem value="Artist">Artist</SelectItem>
-                  <SelectItem value="Musician">Musician</SelectItem>
-                  <SelectItem value="Actor">Actor</SelectItem>
-                  <SelectItem value="Other">Other</SelectItem>
+                  {newEntityType === "company" ? (
+                    <>
+                      <SelectItem value="Technology">Technology</SelectItem>
+                      <SelectItem value="Finance">Finance</SelectItem>
+                      <SelectItem value="Healthcare">Healthcare</SelectItem>
+                      <SelectItem value="Retail">Retail</SelectItem>
+                      <SelectItem value="Manufacturing">Manufacturing</SelectItem>
+                      <SelectItem value="Media">Media</SelectItem>
+                      <SelectItem value="Other">Other</SelectItem>
+                    </>
+                  ) : (
+                    <>
+                      <SelectItem value="Creator">Creator</SelectItem>
+                      <SelectItem value="Influencer">Influencer</SelectItem>
+                      <SelectItem value="Athlete">Athlete</SelectItem>
+                      <SelectItem value="Artist">Artist</SelectItem>
+                      <SelectItem value="Musician">Musician</SelectItem>
+                      <SelectItem value="Actor">Actor</SelectItem>
+                      <SelectItem value="Other">Other</SelectItem>
+                    </>
+                  )}
                 </SelectContent>
               </Select>
             </div>

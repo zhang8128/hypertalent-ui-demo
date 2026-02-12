@@ -4,12 +4,11 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
-import { FileSpreadsheet, FileText, Download, ExternalLink, CheckCircle, AlertCircle } from "lucide-react"
+import { FileSpreadsheet, FileText, Download, CheckCircle, AlertCircle } from "lucide-react"
 import { useState } from "react"
 import { ExportService } from "@/services/export-service"
 import type { Deal } from "@/types/deal"
-import type { TalentProfile } from "@/components/talent-selector"
-import type { UploadedFile } from "@/components/file-upload-zone"
+import type { TalentProfile, UploadedFile } from "@/types/talent"
 
 interface ExportModalProps {
   isOpen: boolean
@@ -20,51 +19,12 @@ interface ExportModalProps {
 }
 
 export function ExportModal({ isOpen, onClose, deals, talent, files }: ExportModalProps) {
-  const [isExporting, setIsExporting] = useState(false)
   const [exportStatus, setExportStatus] = useState<{
     type: "success" | "error" | null
     message: string
-    url?: string
   }>({ type: null, message: "" })
 
   const exportService = ExportService.getInstance()
-
-  const handleGoogleSheetsExport = async () => {
-    setIsExporting(true)
-    setExportStatus({ type: null, message: "" })
-
-    try {
-      const exportData = {
-        talent,
-        deals,
-        files: files.filter((f) => f.status === "completed"),
-        exportedAt: new Date().toISOString(),
-        exportedBy: talent?.name || "User",
-      }
-
-      const result = await exportService.exportToGoogleSheets(exportData)
-
-      if (result.success) {
-        setExportStatus({
-          type: "success",
-          message: "Successfully exported to Google Sheets!",
-          url: result.spreadsheetUrl,
-        })
-      } else {
-        setExportStatus({
-          type: "error",
-          message: result.error || "Export failed. CSV downloaded instead.",
-        })
-      }
-    } catch (error) {
-      setExportStatus({
-        type: "error",
-        message: "Export failed. Please try again or use CSV export.",
-      })
-    } finally {
-      setIsExporting(false)
-    }
-  }
 
   const handleCSVExport = () => {
     const exportData = {
@@ -163,8 +123,8 @@ export function ExportModal({ isOpen, onClose, deals, talent, files }: ExportMod
                     </div>
                   </div>
                 </div>
-                <Button onClick={handleGoogleSheetsExport} disabled={isExporting} className="gap-2">
-                  {isExporting ? "Exporting..." : "Export"}
+                <Button onClick={handleCSVExport} className="gap-2">
+                  Export
                 </Button>
               </div>
             </Card>
@@ -237,13 +197,6 @@ export function ExportModal({ isOpen, onClose, deals, talent, files }: ExportMod
                 <AlertCircle className="w-4 h-4" />
               )}
               <span className="text-sm">{exportStatus.message}</span>
-              {exportStatus.url && (
-                <Button variant="ghost" size="sm" asChild className="ml-auto">
-                  <a href={exportStatus.url} target="_blank" rel="noopener noreferrer">
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                </Button>
-              )}
             </div>
           )}
         </div>

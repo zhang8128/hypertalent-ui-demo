@@ -20,6 +20,9 @@ import {
   Target,
   BarChart3,
   Activity,
+  ExternalLink,
+  Linkedin,
+  UserCheck,
 } from "lucide-react"
 import type { Deal } from "@/types/deal"
 
@@ -28,9 +31,10 @@ interface DealDetailsModalProps {
   isOpen: boolean
   onClose: () => void
   onGenerateOutreach: (deal: Deal) => void
+  initialTab?: string
 }
 
-export function DealDetailsModal({ deal, isOpen, onClose, onGenerateOutreach }: DealDetailsModalProps) {
+export function DealDetailsModal({ deal, isOpen, onClose, onGenerateOutreach, initialTab = "overview" }: DealDetailsModalProps) {
   if (!deal) return null
 
   const getScoreColor = (score: number) => {
@@ -49,9 +53,10 @@ export function DealDetailsModal({ deal, isOpen, onClose, onGenerateOutreach }: 
           </DialogTitle>
         </DialogHeader>
 
-        <Tabs defaultValue="overview" className="space-y-4">
+        <Tabs defaultValue={initialTab} key={initialTab} className="space-y-4">
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="contact">Contact</TabsTrigger>
             <TabsTrigger value="crm">CRM Integration</TabsTrigger>
             <TabsTrigger value="pipeline">Pipeline Tracking</TabsTrigger>
             <TabsTrigger value="engagement">Email Engagement</TabsTrigger>
@@ -105,6 +110,15 @@ export function DealDetailsModal({ deal, isOpen, onClose, onGenerateOutreach }: 
                     <span className="text-muted-foreground">Company Size:</span>
                     <span>{deal.companySize || "Large Enterprise"}</span>
                   </div>
+                  {deal.website && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-muted-foreground">Website:</span>
+                      <a href={deal.website.startsWith('http') ? deal.website : `https://${deal.website}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline flex items-center gap-1">
+                        <ExternalLink className="w-3 h-3" />
+                        {deal.website.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}
+                      </a>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -207,6 +221,122 @@ export function DealDetailsModal({ deal, isOpen, onClose, onGenerateOutreach }: 
                   </div>
                 </div>
               </div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="contact" className="space-y-6">
+            {deal.apolloContact ? (
+              <>
+                <Card className="p-5">
+                  <div className="flex items-start gap-4">
+                    <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                      <UserCheck className="w-6 h-6 text-primary" />
+                    </div>
+                    <div className="flex-1 space-y-1">
+                      <h3 className="text-lg font-semibold">{deal.apolloContact.name}</h3>
+                      {deal.apolloContact.title && (
+                        <p className="text-sm text-muted-foreground">{deal.apolloContact.title}</p>
+                      )}
+                      <p className="text-sm text-muted-foreground">{deal.brand}</p>
+                      {deal.apolloContact.confidence_score > 0 && (
+                        <Badge variant="outline" className="mt-1 bg-green-500/10 text-green-500 border-green-500/30">
+                          Confidence: {deal.apolloContact.confidence_score.toFixed(0)}%
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+
+                <div className="grid grid-cols-1 gap-3">
+                  {deal.apolloContact.email && (
+                    <Card className="p-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <Mail className="w-5 h-5 text-blue-500" />
+                          <div>
+                            <p className="text-xs text-muted-foreground">Email</p>
+                            <p className="text-sm font-medium">{deal.apolloContact.email}</p>
+                          </div>
+                        </div>
+                        <a href={`mailto:${deal.apolloContact.email}`} className="text-primary hover:underline text-sm">
+                          Send Email
+                        </a>
+                      </div>
+                    </Card>
+                  )}
+
+                  {deal.apolloContact.phone && (
+                    <Card className="p-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <Phone className="w-5 h-5 text-green-500" />
+                          <div>
+                            <p className="text-xs text-muted-foreground">Phone</p>
+                            <p className="text-sm font-medium">{deal.apolloContact.phone}</p>
+                          </div>
+                        </div>
+                        <a href={`tel:${deal.apolloContact.phone}`} className="text-primary hover:underline text-sm">
+                          Call
+                        </a>
+                      </div>
+                    </Card>
+                  )}
+
+                  {deal.apolloContact.linkedin_url && (
+                    <Card className="p-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <Linkedin className="w-5 h-5 text-blue-400" />
+                          <div>
+                            <p className="text-xs text-muted-foreground">LinkedIn</p>
+                            <p className="text-sm font-medium">View Profile</p>
+                          </div>
+                        </div>
+                        <a href={deal.apolloContact.linkedin_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline text-sm flex items-center gap-1">
+                          Open <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </div>
+                    </Card>
+                  )}
+                </div>
+
+                {!deal.apolloContact.email && !deal.apolloContact.phone && !deal.apolloContact.linkedin_url && (
+                  <Card className="p-4 text-center">
+                    <p className="text-sm text-muted-foreground">
+                      Contact found but no direct contact details available.
+                    </p>
+                  </Card>
+                )}
+              </>
+            ) : deal.contact ? (
+              <Card className="p-5">
+                <h4 className="font-medium mb-3 flex items-center gap-2">
+                  <Users className="w-4 h-4" />
+                  Contact Information
+                </h4>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Name:</span>
+                    <span>{deal.contact.name || "Brand Manager"}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Email:</span>
+                    <span>{deal.contact.email || "partnerships@brand.com"}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Department:</span>
+                    <span>{deal.contact.department || "Marketing Partnerships"}</span>
+                  </div>
+                </div>
+              </Card>
+            ) : (
+              <Card className="p-6 text-center">
+                <UserCheck className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
+                <p className="text-muted-foreground">No contact information available yet.</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Use "Find partnership contact" on the deal card to search for contacts.
+                </p>
+              </Card>
             )}
           </TabsContent>
 

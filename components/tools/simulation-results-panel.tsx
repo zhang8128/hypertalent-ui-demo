@@ -18,7 +18,8 @@ import {
   Target,
 } from "lucide-react"
 import { useState } from "react"
-import { TalentSelector, type TalentProfile } from "../talent-selector"
+import { TalentSelector } from "../talent-selector"
+import type { TalentProfile } from "@/types/talent"
 
 interface SimulationResultsPanelProps {
   selectedTalent?: TalentProfile
@@ -271,7 +272,7 @@ export function SimulationResultsPanel({
       <TalentSelector
         selectedTalent={selectedTalent}
         onTalentChange={onTalentChange}
-        onCreateNew={() => console.log("Create new talent")}
+        onCreateNew={() => {}}
       />
 
       {/* Enhanced Simulation Controls */}

@@ -25,15 +25,15 @@ import {
   Loader2,
   RefreshCw,
   X,
-  FileText,
-  ImageIcon,
-  FileSpreadsheet,
   Upload,
   Trash2,
 } from "lucide-react"
 import { useState, useEffect, useCallback, useRef } from "react"
+import { apiClient } from "@/services/api-client"
+import type { TalentProfile } from "@/types/talent"
+import { uploadFileToS3, formatFileSize, getFileIcon } from "@/lib/s3-upload"
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qaqyqok7j0.execute-api.us-east-1.amazonaws.com'
+export type { TalentProfile }
 
 export interface TalentDocument {
   id: string
@@ -48,52 +48,13 @@ export interface TalentDocument {
   error?: string
 }
 
-export interface TalentProfile {
-  id: string
-  name: string
-  category: string
-  avatar?: string
-  bio?: string
-  location?: string
-  stats: {
-    followers: number
-    engagement: number
-    deals: number
-    avgDealValue: number
-  }
-  socialMedia: {
-    instagram?: string
-    twitter?: string
-    youtube?: string
-    tiktok?: string
-    website?: string
-  }
-  demographics: {
-    ageRange: string
-    topLocations: string[]
-    interests: string[]
-  }
-  brandAlignment: {
-    categories: string[]
-    values: string[]
-    pastBrands: string[]
-  }
-  goals: {
-    targetDeals: number
-    preferredCategories: string[]
-    minDealValue: number
-  }
-  status: string
-  createdAt: string
-  updatedAt: string
-}
-
 interface TalentProfileManagerProps {
   selectedTalent?: TalentProfile
   onTalentChange: (talent: TalentProfile) => void
+  entityFilter?: "talent" | "company"
 }
 
-export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentProfileManagerProps) {
+export function TalentProfileManager({ selectedTalent, onTalentChange, entityFilter = "talent" }: TalentProfileManagerProps) {
   const [talents, setTalents] = useState<TalentProfile[]>([])
   const [documents, setDocuments] = useState<TalentDocument[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -101,6 +62,9 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [uploadingFiles, setUploadingFiles] = useState<Map<string, TalentDocument>>(new Map())
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const isCompany = entityFilter === "company"
+  const entityLabel = isCompany ? "Company" : "Talent"
 
   const [newTalentForm, setNewTalentForm] = useState({
     name: "",
@@ -112,6 +76,11 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
     youtube: "",
     website: "",
   })
+
+  // Filter talents strictly by entity type
+  const filteredTalents = talents.filter(t =>
+    t.type === entityFilter || (!t.type && entityFilter === "talent")
+  )
 
   // Load talents on mount
   useEffect(() => {
@@ -130,11 +99,8 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
   const loadTalents = async () => {
     setIsLoading(true)
     try {
-      const response = await fetch(`${API_URL}/api/talents`)
-      if (response.ok) {
-        const data = await response.json()
-        setTalents(data.talents || [])
-      }
+      const data = await apiClient.getTalents()
+      setTalents(data.talents || [])
     } catch (error) {
       console.error('Failed to load talents:', error)
     } finally {
@@ -144,11 +110,8 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
 
   const loadDocuments = async (talentId: string) => {
     try {
-      const response = await fetch(`${API_URL}/api/talents/${talentId}/docs`)
-      if (response.ok) {
-        const data = await response.json()
-        setDocuments(data.documents || [])
-      }
+      const data = await apiClient.getTalentDocs(talentId)
+      setDocuments(data.documents || [])
     } catch (error) {
       console.error('Failed to load documents:', error)
     }
@@ -166,14 +129,6 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
     return `$${num}`
   }
 
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return "0 Bytes"
-    const k = 1024
-    const sizes = ["Bytes", "KB", "MB", "GB"]
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
-  }
-
   const handleTalentSelect = async (talentId: string) => {
     const talent = talents.find((t) => t.id === talentId)
     if (talent) {
@@ -186,41 +141,33 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
 
     setIsCreating(true)
     try {
-      const response = await fetch(`${API_URL}/api/talents`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: newTalentForm.name,
-          category: newTalentForm.category || "Creator",
-          bio: newTalentForm.bio || undefined,
-          location: newTalentForm.location || undefined,
-          socialMedia: {
-            instagram: newTalentForm.instagram || undefined,
-            twitter: newTalentForm.twitter || undefined,
-            youtube: newTalentForm.youtube || undefined,
-            website: newTalentForm.website || undefined,
-          }
-        })
+      const newTalent = await apiClient.createTalent({
+        name: newTalentForm.name,
+        category: newTalentForm.category || (isCompany ? "Technology" : "Creator"),
+        type: entityFilter,
+        bio: newTalentForm.bio || undefined,
+        location: newTalentForm.location || undefined,
+        socialMedia: {
+          instagram: newTalentForm.instagram || undefined,
+          twitter: newTalentForm.twitter || undefined,
+          youtube: newTalentForm.youtube || undefined,
+          website: newTalentForm.website || undefined,
+        }
       })
 
-      if (response.ok) {
-        const newTalent = await response.json()
-        setTalents(prev => [...prev, newTalent])
-        onTalentChange(newTalent)
-        setShowCreateDialog(false)
-        setNewTalentForm({
-          name: "",
-          category: "",
-          bio: "",
-          location: "",
-          instagram: "",
-          twitter: "",
-          youtube: "",
-          website: "",
-        })
-      } else {
-        console.error('Failed to create talent')
-      }
+      setTalents(prev => [...prev, newTalent])
+      onTalentChange(newTalent)
+      setShowCreateDialog(false)
+      setNewTalentForm({
+        name: "",
+        category: "",
+        bio: "",
+        location: "",
+        instagram: "",
+        twitter: "",
+        youtube: "",
+        website: "",
+      })
     } catch (error) {
       console.error('Failed to create talent:', error)
     } finally {
@@ -229,20 +176,15 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
   }
 
   const handleDeleteTalent = async (talentId: string) => {
-    if (!confirm('Are you sure you want to delete this talent and all their documents?')) {
+    if (!confirm(`Are you sure you want to delete this ${entityLabel.toLowerCase()} and all their documents?`)) {
       return
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/talents/${talentId}`, {
-        method: 'DELETE'
-      })
-
-      if (response.ok) {
-        setTalents(prev => prev.filter(t => t.id !== talentId))
-        if (selectedTalent?.id === talentId) {
-          onTalentChange(undefined as any)
-        }
+      await apiClient.deleteTalent(talentId)
+      setTalents(prev => prev.filter(t => t.id !== talentId))
+      if (selectedTalent?.id === talentId) {
+        onTalentChange(undefined as any)
       }
     } catch (error) {
       console.error('Failed to delete talent:', error)
@@ -275,80 +217,50 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
       setUploadingFiles(prev => new Map(prev).set(tempId, tempDoc))
 
       try {
-        // 1. Get presigned URL
-        const presignedResponse = await fetch(`${API_URL}/api/talents/${selectedTalent.id}/docs/upload-url`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            filename: file.name,
-            content_type: file.type || 'application/octet-stream'
-          })
-        })
+        const presignedData = await apiClient.getTalentDocUploadUrl(
+          selectedTalent.id,
+          file.name,
+          file.type || 'application/octet-stream'
+        )
 
-        if (!presignedResponse.ok) {
-          throw new Error('Failed to get upload URL')
-        }
-
-        const presignedData = await presignedResponse.json()
-
-        // 2. Upload to S3
-        await new Promise<void>((resolve, reject) => {
-          const xhr = new XMLHttpRequest()
-
-          xhr.upload.addEventListener('progress', (event) => {
-            if (event.lengthComputable) {
-              const progress = (event.loaded / event.total) * 100
-              setUploadingFiles(prev => {
-                const newMap = new Map(prev)
-                const doc = newMap.get(tempId)
-                if (doc) {
-                  newMap.set(tempId, { ...doc, progress })
-                }
-                return newMap
-              })
+        uploadFileToS3(presignedData, file, {
+          onProgress: (progress) => {
+            setUploadingFiles(prev => {
+              const newMap = new Map(prev)
+              const doc = newMap.get(tempId)
+              if (doc) newMap.set(tempId, { ...doc, progress })
+              return newMap
+            })
+          },
+          onSuccess: (data) => {
+            setUploadingFiles(prev => {
+              const newMap = new Map(prev)
+              newMap.delete(tempId)
+              return newMap
+            })
+            const newDoc: TalentDocument = {
+              id: data.file_id || tempId,
+              name: file.name,
+              size: file.size,
+              type: file.type,
+              url: data.public_url,
+              fileKey: data.file_key,
+              uploadedAt: new Date().toISOString(),
+              status: 'completed'
             }
-          })
-
-          xhr.addEventListener('load', () => {
-            if (xhr.status >= 200 && xhr.status < 300) {
-              resolve()
-            } else {
-              reject(new Error(`Upload failed with status ${xhr.status}`))
-            }
-          })
-
-          xhr.addEventListener('error', () => reject(new Error('Upload failed')))
-
-          const formData = new FormData()
-          Object.entries(presignedData.fields).forEach(([key, value]) => {
-            formData.append(key, value as string)
-          })
-          formData.append('file', file)
-
-          xhr.open('POST', presignedData.upload_url)
-          xhr.send(formData)
+            setDocuments(prev => [...prev, newDoc])
+          },
+          onError: (error) => {
+            setUploadingFiles(prev => {
+              const newMap = new Map(prev)
+              const doc = newMap.get(tempId)
+              if (doc) {
+                newMap.set(tempId, { ...doc, status: 'error', error: error.message })
+              }
+              return newMap
+            })
+          },
         })
-
-        // 3. Remove from uploading, add to documents
-        setUploadingFiles(prev => {
-          const newMap = new Map(prev)
-          newMap.delete(tempId)
-          return newMap
-        })
-
-        const newDoc: TalentDocument = {
-          id: presignedData.file_id,
-          name: file.name,
-          size: file.size,
-          type: file.type,
-          url: presignedData.public_url,
-          fileKey: presignedData.file_key,
-          uploadedAt: new Date().toISOString(),
-          status: 'completed'
-        }
-
-        setDocuments(prev => [...prev, newDoc])
-
       } catch (error) {
         setUploadingFiles(prev => {
           const newMap = new Map(prev)
@@ -370,23 +282,11 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
     if (!selectedTalent) return
 
     try {
-      const response = await fetch(`${API_URL}/api/talents/${selectedTalent.id}/docs/${encodeURIComponent(doc.fileKey)}`, {
-        method: 'DELETE'
-      })
-
-      if (response.ok) {
-        setDocuments(prev => prev.filter(d => d.id !== doc.id))
-      }
+      await apiClient.deleteTalentDoc(selectedTalent.id, doc.fileKey)
+      setDocuments(prev => prev.filter(d => d.id !== doc.id))
     } catch (error) {
       console.error('Failed to delete document:', error)
     }
-  }
-
-  const getFileIcon = (type: string) => {
-    if (type.includes("pdf")) return <FileText className="w-4 h-4" />
-    if (type.includes("sheet") || type.includes("excel")) return <FileSpreadsheet className="w-4 h-4" />
-    if (type.includes("image")) return <ImageIcon className="w-4 h-4" />
-    return <FileText className="w-4 h-4" />
   }
 
   const allFiles = [
@@ -397,7 +297,7 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">Talent Profile</h3>
+        <h3 className="text-lg font-semibold">{entityLabel} Profile</h3>
         <div className="flex gap-2">
           <Button variant="ghost" size="sm" onClick={loadTalents} disabled={isLoading}>
             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
@@ -406,47 +306,64 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
             <DialogTrigger asChild>
               <Button variant="outline" size="sm" className="gap-2 bg-transparent">
                 <Plus className="w-4 h-4" />
-                New Talent
+                New {entityLabel}
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
               <DialogHeader>
-                <DialogTitle>Create New Talent Profile</DialogTitle>
+                <DialogTitle>Create New {entityLabel} Profile</DialogTitle>
               </DialogHeader>
               <Tabs defaultValue="basic" className="w-full">
                 <TabsList className="grid w-full grid-cols-2">
                   <TabsTrigger value="basic">Basic Info</TabsTrigger>
-                  <TabsTrigger value="social">Social Media</TabsTrigger>
+                  <TabsTrigger value="social">{isCompany ? "Online Presence" : "Social Media"}</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="basic" className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <Label htmlFor="name">Full Name *</Label>
+                      <Label htmlFor="name">{isCompany ? "Company Name" : "Full Name"} *</Label>
                       <Input
                         id="name"
                         value={newTalentForm.name}
                         onChange={(e) => setNewTalentForm((prev) => ({ ...prev, name: e.target.value }))}
-                        placeholder="Enter full name"
+                        placeholder={isCompany ? "Enter company name" : "Enter full name"}
                       />
                     </div>
                     <div>
-                      <Label htmlFor="category">Category</Label>
+                      <Label htmlFor="category">{isCompany ? "Industry" : "Category"}</Label>
                       <Select
                         value={newTalentForm.category}
                         onValueChange={(value) => setNewTalentForm((prev) => ({ ...prev, category: value }))}
                       >
                         <SelectTrigger>
-                          <SelectValue placeholder="Select category" />
+                          <SelectValue placeholder={isCompany ? "Select industry" : "Select category"} />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="Professional Athlete">Professional Athlete</SelectItem>
-                          <SelectItem value="Lifestyle Influencer">Lifestyle Influencer</SelectItem>
-                          <SelectItem value="Gaming Creator">Gaming Creator</SelectItem>
-                          <SelectItem value="Fashion Influencer">Fashion Influencer</SelectItem>
-                          <SelectItem value="Tech Reviewer">Tech Reviewer</SelectItem>
-                          <SelectItem value="Fitness Influencer">Fitness Influencer</SelectItem>
-                          <SelectItem value="Creator">Creator</SelectItem>
+                          {isCompany ? (
+                            <>
+                              <SelectItem value="Technology">Technology</SelectItem>
+                              <SelectItem value="SaaS">SaaS</SelectItem>
+                              <SelectItem value="E-commerce">E-commerce</SelectItem>
+                              <SelectItem value="Finance">Finance</SelectItem>
+                              <SelectItem value="Healthcare">Healthcare</SelectItem>
+                              <SelectItem value="Manufacturing">Manufacturing</SelectItem>
+                              <SelectItem value="Retail">Retail</SelectItem>
+                              <SelectItem value="Media & Entertainment">Media & Entertainment</SelectItem>
+                              <SelectItem value="Professional Services">Professional Services</SelectItem>
+                              <SelectItem value="Other">Other</SelectItem>
+                            </>
+                          ) : (
+                            <>
+                              <SelectItem value="Professional Athlete">Professional Athlete</SelectItem>
+                              <SelectItem value="Lifestyle Influencer">Lifestyle Influencer</SelectItem>
+                              <SelectItem value="Gaming Creator">Gaming Creator</SelectItem>
+                              <SelectItem value="Fashion Influencer">Fashion Influencer</SelectItem>
+                              <SelectItem value="Tech Reviewer">Tech Reviewer</SelectItem>
+                              <SelectItem value="Fitness Influencer">Fitness Influencer</SelectItem>
+                              <SelectItem value="Creator">Creator</SelectItem>
+                            </>
+                          )}
                         </SelectContent>
                       </Select>
                     </div>
@@ -466,7 +383,7 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
                       id="bio"
                       value={newTalentForm.bio}
                       onChange={(e) => setNewTalentForm((prev) => ({ ...prev, bio: e.target.value }))}
-                      placeholder="Brief description of the talent..."
+                      placeholder={isCompany ? "Brief description of the company..." : "Brief description of the talent..."}
                       rows={3}
                     />
                   </div>
@@ -560,23 +477,23 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
         </div>
       </div>
 
-      {/* Talent Selector */}
+      {/* Entity Selector */}
       {isLoading ? (
         <div className="flex items-center justify-center p-4">
           <Loader2 className="w-6 h-6 animate-spin" />
         </div>
-      ) : talents.length === 0 ? (
+      ) : filteredTalents.length === 0 ? (
         <Card className="p-6 text-center">
           <User className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
-          <p className="text-muted-foreground">No talent profiles yet. Create one to get started.</p>
+          <p className="text-muted-foreground">No {entityLabel.toLowerCase()} profiles yet. Create one to get started.</p>
         </Card>
       ) : (
         <Select value={selectedTalent?.id} onValueChange={handleTalentSelect}>
           <SelectTrigger>
-            <SelectValue placeholder="Select a talent profile" />
+            <SelectValue placeholder={`Select a ${entityLabel.toLowerCase()} profile`} />
           </SelectTrigger>
           <SelectContent>
-            {talents.map((talent) => (
+            {filteredTalents.map((talent) => (
               <SelectItem key={talent.id} value={talent.id}>
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 bg-primary/20 rounded-full flex items-center justify-center">
@@ -645,28 +562,28 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
                       <User className="w-4 h-4" />
                       <span className="font-semibold">{formatNumber(selectedTalent.stats?.followers || 0)}</span>
                     </div>
-                    <p className="text-xs text-muted-foreground">Followers</p>
+                    <p className="text-xs text-muted-foreground">{isCompany ? "Employees" : "Followers"}</p>
                   </div>
                   <div className="text-center">
                     <div className="flex items-center justify-center gap-1 mb-1">
                       <TrendingUp className="w-4 h-4" />
                       <span className="font-semibold">{selectedTalent.stats?.engagement || 0}%</span>
                     </div>
-                    <p className="text-xs text-muted-foreground">Engagement</p>
+                    <p className="text-xs text-muted-foreground">{isCompany ? "Growth" : "Engagement"}</p>
                   </div>
                   <div className="text-center">
                     <div className="flex items-center justify-center gap-1 mb-1">
                       <Star className="w-4 h-4" />
                       <span className="font-semibold">{selectedTalent.stats?.deals || 0}</span>
                     </div>
-                    <p className="text-xs text-muted-foreground">Deals</p>
+                    <p className="text-xs text-muted-foreground">{isCompany ? "Partnerships" : "Deals"}</p>
                   </div>
                   <div className="text-center">
                     <div className="flex items-center justify-center gap-1 mb-1">
                       <DollarSign className="w-4 h-4" />
                       <span className="font-semibold">{formatCurrency(selectedTalent.stats?.avgDealValue || 0)}</span>
                     </div>
-                    <p className="text-xs text-muted-foreground">Avg Deal</p>
+                    <p className="text-xs text-muted-foreground">{isCompany ? "Avg Partnership" : "Avg Deal"}</p>
                   </div>
                 </div>
 
@@ -695,7 +612,7 @@ export function TalentProfileManager({ selectedTalent, onTalentChange }: TalentP
                 {/* Brand Alignment */}
                 {selectedTalent.brandAlignment?.categories?.length > 0 && (
                   <div className="space-y-2">
-                    <h5 className="text-sm font-medium">Brand Categories</h5>
+                    <h5 className="text-sm font-medium">{isCompany ? "Partner Categories" : "Brand Categories"}</h5>
                     <div className="flex flex-wrap gap-1">
                       {selectedTalent.brandAlignment.categories.map((category) => (
                         <Badge key={category} variant="secondary" className="text-xs">

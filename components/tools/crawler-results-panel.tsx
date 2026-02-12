@@ -18,8 +18,7 @@ import {
   Zap,
 } from "lucide-react"
 import { useState, useEffect } from "react"
-import type { TalentProfile } from "../talent-selector"
-import type { UploadedFile } from "../file-upload-zone"
+import type { TalentProfile, UploadedFile } from "@/types/talent"
 
 interface CrawlerResultsPanelProps {
   selectedTalent?: TalentProfile

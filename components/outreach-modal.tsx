@@ -8,7 +8,7 @@ import { Copy, Send, RefreshCw, Mail, Sparkles } from "lucide-react"
 import { useState, useEffect } from "react"
 import { OutreachGenerationSystem } from "./outreach-generation-system"
 import type { Deal } from "@/types/deal"
-import type { TalentProfile } from "./talent-profile-manager"
+import type { TalentProfile } from "@/types/talent"
 
 interface OutreachModalProps {
   deal: Deal | null
@@ -81,7 +81,6 @@ P.S. I've attached ${talentName}'s media kit and recent performance metrics for 
   }
 
   const handleEmailSent = (deal: Deal, email: string) => {
-    console.log("[v0] Email sent for deal:", deal.id)
     // Here you could update deal status, log the outreach, etc.
   }
 

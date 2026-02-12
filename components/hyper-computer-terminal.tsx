@@ -19,11 +19,9 @@ import {
   AlertCircle,
 } from "lucide-react"
 import { useState, useRef, useEffect, useCallback } from "react"
-import type { TalentProfile } from "./talent-profile-manager"
+import type { TalentProfile, UploadedFile } from "@/types/talent"
 import type { ToolType } from "@/app/page"
-import type { UploadedFile } from "./file-upload-zone"
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qaqyqok7j0.execute-api.us-east-1.amazonaws.com'
+import { apiClient } from "@/services/api-client"
 
 interface AgentStep {
   id: string
@@ -40,10 +38,10 @@ const getQuickPrompts = (tool: ToolType): string[] => {
   switch (tool) {
     case "chat":
       return [
+        "What deals do I have?",
+        "Tell me about my highest scoring deal",
         "Draft a partnership proposal for Nike",
-        "Analyze market trends in sports nutrition",
         "Create a media kit template",
-        "Generate contract negotiation points",
       ]
     case "crawler":
       return [
@@ -179,33 +177,31 @@ export function HyperComputerTerminal({
     setIsConnected(false)
 
     try {
-      const response = await fetch(`${API_URL}/api/chat/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          talent_id: talentId,
-          talent_name: talentName
-        })
-      })
-
-      if (!response.ok) {
-        throw new Error('Failed to start chat session')
-      }
-
-      const data = await response.json()
+      const data = await apiClient.startChatSession({
+        talent_id: talentId,
+        talent_name: talentName,
+      }) as any
       setSessionId(data.session_id)
       setIsConnected(true)
 
       // Add welcome message
+      const dealsLoaded = data.deals_loaded || 0
+      const contextParts: string[] = []
+      if (data.files_loaded > 0) contextParts.push(`${data.files_loaded} documents`)
+      if (dealsLoaded > 0) contextParts.push(`${dealsLoaded} deals from history`)
+      const contextStr = contextParts.length > 0 ? contextParts.join(" and ") : "no documents"
+      const fallbackMessage = `Connected! I have access to ${contextStr} for ${data.talent_name}.`
+
       const welcomeMessage: AgentStep = {
         id: `welcome-${Date.now()}`,
         agent: "system",
         status: "completed",
-        message: data.message || `Connected! I have access to ${data.files_loaded} documents for ${data.talent_name}.`,
+        message: data.message || fallbackMessage,
         timestamp: new Date().toISOString(),
         expanded: true,
         data: {
           files_loaded: data.files_loaded,
+          deals_loaded: dealsLoaded,
           categories: data.categories,
           talent_name: data.talent_name
         }
@@ -273,20 +269,7 @@ export function HyperComputerTerminal({
         }
         setMessages((prev) => [...prev, processingStep])
 
-        const response = await fetch(`${API_URL}/api/chat/message`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            session_id: sessionId,
-            message: query
-          })
-        })
-
-        if (!response.ok) {
-          throw new Error('Failed to send message')
-        }
-
-        const data = await response.json()
+        const data = await apiClient.sendChatMessage(sessionId, query) as any
 
         // Remove processing indicator and add real response
         setMessages((prev) => {
@@ -604,7 +587,7 @@ export function HyperComputerTerminal({
               onChange={(e) => setInput(e.target.value)}
               placeholder={
                 isConnected
-                  ? `Ask about ${selectedTalent?.name || 'talent'}'s documents...`
+                  ? `Ask about ${selectedTalent?.name || 'talent'}'s documents and deals...`
                   : `Ask ${toolConfig.title.replace(" Terminal", "")} about talent opportunities...`
               }
               className="flex-1"

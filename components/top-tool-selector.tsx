@@ -1,7 +1,7 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
-import { MessageSquare, Globe, Target, Gamepad2, Play } from "lucide-react"
+import { MessageSquare, Globe, Target, Building2, Play } from "lucide-react"
 import type { ToolType } from "@/app/page"
 
 interface TopToolSelectorProps {
@@ -13,7 +13,7 @@ const tools = [
   { id: "chat" as ToolType, name: "AI Chat", icon: MessageSquare },
   { id: "crawler" as ToolType, name: "Web Crawler", icon: Globe },
   { id: "deal-hunter" as ToolType, name: "Deal Hunter", icon: Target },
-  { id: "gameplan" as ToolType, name: "GamePlan X", icon: Gamepad2 },
+  { id: "gameplanx" as ToolType, name: "Gameplan X", icon: Building2 },
   { id: "simulation" as ToolType, name: "Simulation", icon: Play },
 ]
 

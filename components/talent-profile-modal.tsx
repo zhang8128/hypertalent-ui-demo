@@ -21,6 +21,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import {
   User,
   Star,
@@ -28,10 +30,6 @@ import {
   Upload,
   X,
   RefreshCw,
-  FileText,
-  ImageIcon,
-  Video,
-  FileSpreadsheet,
   AlertCircle,
   CheckCircle,
   Loader2,
@@ -41,21 +39,14 @@ import {
   Youtube,
   Globe,
   ExternalLink,
+  Pencil,
+  Save,
 } from "lucide-react"
 import { useState, useCallback, useRef, useEffect } from "react"
-import type { TalentProfile, UploadedFile } from "./talent-selector"
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qaqyqok7j0.execute-api.us-east-1.amazonaws.com'
-
-interface TalentDocument {
-  id: string
-  name: string
-  size: number
-  type: string
-  url: string
-  fileKey: string
-  uploadedAt: string
-}
+import type { TalentProfile, UploadedFile, TalentDocument } from "@/types/talent"
+import { apiClient } from "@/services/api-client"
+import { ACCEPTED_TYPES, MAX_FILE_SIZE } from "@/lib/upload-constants"
+import { uploadFileToS3, formatFileSize, getFileIcon } from "@/lib/s3-upload"
 
 interface TalentProfileModalProps {
   talent: TalentProfile
@@ -64,20 +55,6 @@ interface TalentProfileModalProps {
   onTalentDeleted: () => void
   onTalentUpdated?: (talent: TalentProfile) => void
 }
-
-const ACCEPTED_TYPES = {
-  "application/pdf": [".pdf"],
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
-  "application/vnd.ms-excel": [".xls"],
-  "application/msword": [".doc"],
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
-  "text/plain": [".txt"],
-  "text/csv": [".csv"],
-  "image/*": [".jpg", ".jpeg", ".png", ".gif", ".webp"],
-  "video/*": [".mp4", ".mov", ".avi", ".mkv"],
-}
-
-const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB
 
 export function TalentProfileModal({
   talent,
@@ -93,6 +70,9 @@ export function TalentProfileModal({
   const [isDeleting, setIsDeleting] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [fullProfile, setFullProfile] = useState<any>(null)
+  const [isEditing, setIsEditing] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [editData, setEditData] = useState<Record<string, any>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
   const originalFilesRef = useRef<Map<string, File>>(new Map())
 
@@ -108,11 +88,8 @@ export function TalentProfileModal({
     if (!talent?.id) return
     setIsLoadingDocs(true)
     try {
-      const response = await fetch(`${API_URL}/api/talents/${talent.id}/docs`)
-      if (response.ok) {
-        const data = await response.json()
-        setDocuments(data.documents || [])
-      }
+      const data = await apiClient.getTalentDocs(talent.id)
+      setDocuments(data.documents || [])
     } catch (error) {
       console.error('Failed to load documents:', error)
     } finally {
@@ -123,36 +100,75 @@ export function TalentProfileModal({
   const loadFullProfile = async () => {
     if (!talent?.id) return
     try {
-      const response = await fetch(`${API_URL}/api/talents/${talent.id}`)
-      if (response.ok) {
-        const data = await response.json()
-        setFullProfile(data)
-      }
+      const data = await apiClient.getTalent(talent.id)
+      setFullProfile(data)
     } catch (error) {
       console.error('Failed to load full profile:', error)
     }
+  }
+
+  const startEditing = () => {
+    setEditData({
+      name: fullProfile?.name || talent.name,
+      category: fullProfile?.category || talent.category,
+      bio: fullProfile?.bio || "",
+      location: fullProfile?.location || "",
+      status: fullProfile?.status || talent.status,
+      stats: {
+        followers: fullProfile?.stats?.followers ?? talent.stats?.followers ?? 0,
+        engagement: fullProfile?.stats?.engagement ?? talent.stats?.engagement ?? 0,
+        deals: fullProfile?.stats?.deals ?? talent.stats?.deals ?? 0,
+        avgDealValue: fullProfile?.stats?.avgDealValue ?? talent.stats?.avgDealValue ?? 0,
+      },
+      socialMedia: {
+        instagram: fullProfile?.socialMedia?.instagram || "",
+        twitter: fullProfile?.socialMedia?.twitter || "",
+        youtube: fullProfile?.socialMedia?.youtube || "",
+        tiktok: fullProfile?.socialMedia?.tiktok || "",
+        website: fullProfile?.socialMedia?.website || "",
+      },
+    })
+    setIsEditing(true)
+  }
+
+  const cancelEditing = () => {
+    setIsEditing(false)
+    setEditData({})
+  }
+
+  const handleSave = async () => {
+    setIsSaving(true)
+    try {
+      const updated = await apiClient.updateTalent(talent.id, editData)
+      setFullProfile(updated)
+      setIsEditing(false)
+      setEditData({})
+      onTalentUpdated?.({
+        ...talent,
+        ...updated,
+      })
+    } catch (error) {
+      console.error("Failed to save talent:", error)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const updateField = (field: string, value: any) => {
+    setEditData(prev => ({ ...prev, [field]: value }))
+  }
+
+  const updateNestedField = (parent: string, field: string, value: any) => {
+    setEditData(prev => ({
+      ...prev,
+      [parent]: { ...prev[parent], [field]: value },
+    }))
   }
 
   const formatNumber = (num: number) => {
     if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`
     if (num >= 1000) return `${(num / 1000).toFixed(1)}K`
     return num.toString()
-  }
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return "0 Bytes"
-    const k = 1024
-    const sizes = ["Bytes", "KB", "MB", "GB"]
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
-  }
-
-  const getFileIcon = (type: string) => {
-    if (type.includes("pdf")) return <FileText className="w-4 h-4" />
-    if (type.includes("sheet") || type.includes("excel")) return <FileSpreadsheet className="w-4 h-4" />
-    if (type.includes("image")) return <ImageIcon className="w-4 h-4" />
-    if (type.includes("video")) return <Video className="w-4 h-4" />
-    return <FileText className="w-4 h-4" />
   }
 
   const validateFile = (file: File): string | null => {
@@ -174,54 +190,29 @@ export function TalentProfileModal({
 
   const uploadToS3 = async (uploadFile: UploadedFile, originalFile: File): Promise<void> => {
     try {
-      const presignedResponse = await fetch(`${API_URL}/api/talents/${talent.id}/docs/upload-url`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: uploadFile.name,
-          content_type: uploadFile.type || 'application/octet-stream',
-        })
-      })
+      const presignedData = await apiClient.getTalentDocUploadUrl(
+        talent.id,
+        uploadFile.name,
+        uploadFile.type || 'application/octet-stream'
+      )
 
-      if (!presignedResponse.ok) {
-        throw new Error('Failed to get upload URL')
-      }
-
-      const presignedData = await presignedResponse.json()
-
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest()
-
-        xhr.upload.addEventListener('progress', (event) => {
-          if (event.lengthComputable) {
-            const progress = (event.loaded / event.total) * 100
-            setUploadingFiles(prev => prev.map((f) => (f.id === uploadFile.id ? { ...f, progress } : f)))
-          }
-        })
-
-        xhr.addEventListener('load', () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            setUploadingFiles(prev => prev.filter(f => f.id !== uploadFile.id))
-            // Reload documents list
-            loadDocuments()
-            resolve()
-          } else {
-            reject(new Error(`Upload failed with status ${xhr.status}`))
-          }
-        })
-
-        xhr.addEventListener('error', () => {
-          reject(new Error('Upload failed'))
-        })
-
-        const formData = new FormData()
-        Object.entries(presignedData.fields).forEach(([key, value]) => {
-          formData.append(key, value as string)
-        })
-        formData.append('file', originalFile)
-
-        xhr.open('POST', presignedData.upload_url)
-        xhr.send(formData)
+      uploadFileToS3(presignedData, originalFile, {
+        onProgress: (progress) => {
+          setUploadingFiles(prev => prev.map((f) => (f.id === uploadFile.id ? { ...f, progress } : f)))
+        },
+        onSuccess: () => {
+          setUploadingFiles(prev => prev.filter(f => f.id !== uploadFile.id))
+          loadDocuments()
+        },
+        onError: (error) => {
+          setUploadingFiles(prev =>
+            prev.map((f) =>
+              f.id === uploadFile.id
+                ? { ...f, status: "error" as const, error: error.message }
+                : f,
+            ),
+          )
+        },
       })
     } catch (error) {
       setUploadingFiles(prev =>
@@ -231,7 +222,6 @@ export function TalentProfileModal({
             : f,
         ),
       )
-      throw error
     }
   }
 
@@ -310,9 +300,7 @@ export function TalentProfileModal({
 
   const deleteDocument = async (doc: TalentDocument) => {
     try {
-      await fetch(`${API_URL}/api/talents/${talent.id}/docs/${encodeURIComponent(doc.fileKey)}`, {
-        method: 'DELETE'
-      })
+      await apiClient.deleteTalentDoc(talent.id, doc.fileKey)
       setDocuments(prev => prev.filter(d => d.id !== doc.id))
     } catch (error) {
       console.error('Failed to delete document:', error)
@@ -322,14 +310,10 @@ export function TalentProfileModal({
   const handleDeleteTalent = async () => {
     setIsDeleting(true)
     try {
-      const response = await fetch(`${API_URL}/api/talents/${talent.id}`, {
-        method: 'DELETE'
-      })
-      if (response.ok) {
-        setShowDeleteConfirm(false)
-        onClose()
-        onTalentDeleted()
-      }
+      await apiClient.deleteTalent(talent.id)
+      setShowDeleteConfirm(false)
+      onClose()
+      onTalentDeleted()
     } catch (error) {
       console.error('Failed to delete talent:', error)
     } finally {
@@ -356,9 +340,16 @@ export function TalentProfileModal({
                     .join("")}
                 </span>
               </div>
-              <div>
-                <DialogTitle className="text-xl">{talent.name}</DialogTitle>
-                <Badge variant="outline" className="mt-1">{talent.category}</Badge>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <DialogTitle className="text-xl">{isEditing ? editData.name : talent.name}</DialogTitle>
+                  {!isEditing && (
+                    <Button variant="ghost" size="sm" onClick={startEditing} className="h-7 w-7 p-0">
+                      <Pencil className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
+                </div>
+                <Badge variant="outline" className="mt-1">{isEditing ? editData.category : talent.category}</Badge>
               </div>
             </div>
           </DialogHeader>
@@ -373,105 +364,242 @@ export function TalentProfileModal({
 
             <div className="flex-1 overflow-y-auto">
               <TabsContent value="profile" className="mt-4 space-y-6">
-                {/* Stats */}
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="p-4 bg-secondary rounded-lg text-center">
-                    <User className="w-5 h-5 mx-auto mb-2 text-muted-foreground" />
-                    <p className="text-2xl font-bold">{formatNumber(talent.stats?.followers || 0)}</p>
-                    <p className="text-xs text-muted-foreground">Followers</p>
-                  </div>
-                  <div className="p-4 bg-secondary rounded-lg text-center">
-                    <TrendingUp className="w-5 h-5 mx-auto mb-2 text-muted-foreground" />
-                    <p className="text-2xl font-bold">{talent.stats?.engagement || 0}%</p>
-                    <p className="text-xs text-muted-foreground">Engagement</p>
-                  </div>
-                  <div className="p-4 bg-secondary rounded-lg text-center">
-                    <Star className="w-5 h-5 mx-auto mb-2 text-muted-foreground" />
-                    <p className="text-2xl font-bold">{talent.stats?.deals || 0}</p>
-                    <p className="text-xs text-muted-foreground">Deals</p>
-                  </div>
-                </div>
-
-                {/* Bio */}
-                {fullProfile?.bio && (
-                  <div>
-                    <h4 className="text-sm font-medium mb-2">Bio</h4>
-                    <p className="text-sm text-muted-foreground">{fullProfile.bio}</p>
-                  </div>
-                )}
-
-                {/* Location */}
-                {fullProfile?.location && (
-                  <div>
-                    <h4 className="text-sm font-medium mb-2">Location</h4>
-                    <p className="text-sm text-muted-foreground">{fullProfile.location}</p>
-                  </div>
-                )}
-
-                {/* Social Media */}
-                {fullProfile?.socialMedia && (
-                  <div>
-                    <h4 className="text-sm font-medium mb-2">Social Media</h4>
-                    <div className="flex flex-wrap gap-2">
-                      {fullProfile.socialMedia.instagram && (
-                        <a
-                          href={`https://instagram.com/${fullProfile.socialMedia.instagram}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1 px-3 py-1.5 bg-secondary rounded-lg text-sm hover:bg-secondary/80"
-                        >
-                          <Instagram className="w-4 h-4" />
-                          {fullProfile.socialMedia.instagram}
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
-                      {fullProfile.socialMedia.twitter && (
-                        <a
-                          href={`https://twitter.com/${fullProfile.socialMedia.twitter}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1 px-3 py-1.5 bg-secondary rounded-lg text-sm hover:bg-secondary/80"
-                        >
-                          <Twitter className="w-4 h-4" />
-                          {fullProfile.socialMedia.twitter}
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
-                      {fullProfile.socialMedia.youtube && (
-                        <a
-                          href={fullProfile.socialMedia.youtube}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1 px-3 py-1.5 bg-secondary rounded-lg text-sm hover:bg-secondary/80"
-                        >
-                          <Youtube className="w-4 h-4" />
-                          YouTube
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
-                      {fullProfile.socialMedia.website && (
-                        <a
-                          href={fullProfile.socialMedia.website}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1 px-3 py-1.5 bg-secondary rounded-lg text-sm hover:bg-secondary/80"
-                        >
-                          <Globe className="w-4 h-4" />
-                          Website
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
+                {isEditing ? (
+                  <>
+                    {/* Edit: Name & Category */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-sm font-medium mb-1 block">Name</label>
+                        <Input
+                          value={editData.name}
+                          onChange={(e) => updateField("name", e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium mb-1 block">Category</label>
+                        <Input
+                          value={editData.category}
+                          onChange={(e) => updateField("category", e.target.value)}
+                        />
+                      </div>
                     </div>
-                  </div>
-                )}
 
-                {/* Status */}
-                <div>
-                  <h4 className="text-sm font-medium mb-2">Status</h4>
-                  <Badge variant={talent.status === 'active' ? 'default' : 'secondary'}>
-                    {talent.status}
-                  </Badge>
-                </div>
+                    {/* Edit: Bio */}
+                    <div>
+                      <label className="text-sm font-medium mb-1 block">Bio</label>
+                      <Textarea
+                        value={editData.bio}
+                        onChange={(e) => updateField("bio", e.target.value)}
+                        rows={3}
+                      />
+                    </div>
+
+                    {/* Edit: Location */}
+                    <div>
+                      <label className="text-sm font-medium mb-1 block">Location</label>
+                      <Input
+                        value={editData.location}
+                        onChange={(e) => updateField("location", e.target.value)}
+                      />
+                    </div>
+
+                    {/* Edit: Stats */}
+                    <div>
+                      <h4 className="text-sm font-medium mb-2">Stats</h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs text-muted-foreground mb-1 block">Followers</label>
+                          <Input
+                            type="number"
+                            value={editData.stats?.followers ?? 0}
+                            onChange={(e) => updateNestedField("stats", "followers", Number(e.target.value))}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-muted-foreground mb-1 block">Engagement %</label>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={editData.stats?.engagement ?? 0}
+                            onChange={(e) => updateNestedField("stats", "engagement", Number(e.target.value))}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-muted-foreground mb-1 block">Deals</label>
+                          <Input
+                            type="number"
+                            value={editData.stats?.deals ?? 0}
+                            onChange={(e) => updateNestedField("stats", "deals", Number(e.target.value))}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-muted-foreground mb-1 block">Avg Deal Value ($)</label>
+                          <Input
+                            type="number"
+                            value={editData.stats?.avgDealValue ?? 0}
+                            onChange={(e) => updateNestedField("stats", "avgDealValue", Number(e.target.value))}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Edit: Social Media */}
+                    <div>
+                      <h4 className="text-sm font-medium mb-2">Social Media</h4>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Instagram className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                          <Input
+                            placeholder="Instagram handle"
+                            value={editData.socialMedia?.instagram || ""}
+                            onChange={(e) => updateNestedField("socialMedia", "instagram", e.target.value)}
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Twitter className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                          <Input
+                            placeholder="Twitter handle"
+                            value={editData.socialMedia?.twitter || ""}
+                            onChange={(e) => updateNestedField("socialMedia", "twitter", e.target.value)}
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Youtube className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                          <Input
+                            placeholder="YouTube URL"
+                            value={editData.socialMedia?.youtube || ""}
+                            onChange={(e) => updateNestedField("socialMedia", "youtube", e.target.value)}
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Globe className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                          <Input
+                            placeholder="Website URL"
+                            value={editData.socialMedia?.website || ""}
+                            onChange={(e) => updateNestedField("socialMedia", "website", e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Edit: Status */}
+                    <div>
+                      <h4 className="text-sm font-medium mb-2">Status</h4>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => updateField("status", editData.status === "active" ? "inactive" : "active")}
+                      >
+                        <Badge variant={editData.status === "active" ? "default" : "secondary"} className="mr-2">
+                          {editData.status}
+                        </Badge>
+                        Click to toggle
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {/* Stats */}
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="p-4 bg-secondary rounded-lg text-center">
+                        <User className="w-5 h-5 mx-auto mb-2 text-muted-foreground" />
+                        <p className="text-2xl font-bold">{formatNumber(talent.stats?.followers || 0)}</p>
+                        <p className="text-xs text-muted-foreground">Followers</p>
+                      </div>
+                      <div className="p-4 bg-secondary rounded-lg text-center">
+                        <TrendingUp className="w-5 h-5 mx-auto mb-2 text-muted-foreground" />
+                        <p className="text-2xl font-bold">{talent.stats?.engagement || 0}%</p>
+                        <p className="text-xs text-muted-foreground">Engagement</p>
+                      </div>
+                      <div className="p-4 bg-secondary rounded-lg text-center">
+                        <Star className="w-5 h-5 mx-auto mb-2 text-muted-foreground" />
+                        <p className="text-2xl font-bold">{talent.stats?.deals || 0}</p>
+                        <p className="text-xs text-muted-foreground">Deals</p>
+                      </div>
+                    </div>
+
+                    {/* Bio */}
+                    {fullProfile?.bio && (
+                      <div>
+                        <h4 className="text-sm font-medium mb-2">Bio</h4>
+                        <p className="text-sm text-muted-foreground">{fullProfile.bio}</p>
+                      </div>
+                    )}
+
+                    {/* Location */}
+                    {fullProfile?.location && (
+                      <div>
+                        <h4 className="text-sm font-medium mb-2">Location</h4>
+                        <p className="text-sm text-muted-foreground">{fullProfile.location}</p>
+                      </div>
+                    )}
+
+                    {/* Social Media */}
+                    {fullProfile?.socialMedia && (
+                      <div>
+                        <h4 className="text-sm font-medium mb-2">Social Media</h4>
+                        <div className="flex flex-wrap gap-2">
+                          {fullProfile.socialMedia.instagram && (
+                            <a
+                              href={`https://instagram.com/${fullProfile.socialMedia.instagram}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1 px-3 py-1.5 bg-secondary rounded-lg text-sm hover:bg-secondary/80"
+                            >
+                              <Instagram className="w-4 h-4" />
+                              {fullProfile.socialMedia.instagram}
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                          {fullProfile.socialMedia.twitter && (
+                            <a
+                              href={`https://twitter.com/${fullProfile.socialMedia.twitter}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1 px-3 py-1.5 bg-secondary rounded-lg text-sm hover:bg-secondary/80"
+                            >
+                              <Twitter className="w-4 h-4" />
+                              {fullProfile.socialMedia.twitter}
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                          {fullProfile.socialMedia.youtube && (
+                            <a
+                              href={fullProfile.socialMedia.youtube}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1 px-3 py-1.5 bg-secondary rounded-lg text-sm hover:bg-secondary/80"
+                            >
+                              <Youtube className="w-4 h-4" />
+                              YouTube
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                          {fullProfile.socialMedia.website && (
+                            <a
+                              href={fullProfile.socialMedia.website}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1 px-3 py-1.5 bg-secondary rounded-lg text-sm hover:bg-secondary/80"
+                            >
+                              <Globe className="w-4 h-4" />
+                              Website
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Status */}
+                    <div>
+                      <h4 className="text-sm font-medium mb-2">Status</h4>
+                      <Badge variant={talent.status === 'active' ? 'default' : 'secondary'}>
+                        {talent.status}
+                      </Badge>
+                    </div>
+                  </>
+                )}
               </TabsContent>
 
               <TabsContent value="documents" className="mt-4 space-y-4">
@@ -579,17 +707,35 @@ export function TalentProfileModal({
           </Tabs>
 
           <DialogFooter className="flex-shrink-0 border-t pt-4 mt-4">
-            <Button
-              variant="destructive"
-              onClick={() => setShowDeleteConfirm(true)}
-              className="mr-auto"
-            >
-              <Trash2 className="w-4 h-4 mr-2" />
-              Delete Talent
-            </Button>
-            <Button variant="outline" onClick={onClose}>
-              Close
-            </Button>
+            {isEditing ? (
+              <>
+                <Button variant="outline" onClick={cancelEditing} className="mr-auto">
+                  Cancel
+                </Button>
+                <Button onClick={handleSave} disabled={isSaving}>
+                  {isSaving ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Save className="w-4 h-4 mr-2" />
+                  )}
+                  Save Changes
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  variant="destructive"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="mr-auto"
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Delete Talent
+                </Button>
+                <Button variant="outline" onClick={onClose}>
+                  Close
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

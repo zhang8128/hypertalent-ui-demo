@@ -1,24 +1,22 @@
 "use client"
 
 import type React from "react"
-
 import { createContext, useContext, useEffect, useState } from "react"
+import { apiClient } from "@/services/api-client"
 
 interface User {
-  id: string
   email: string
   name: string
-  role: "talent_manager" | "bd_executive" | "admin"
-  avatar?: string
+  picture?: string
 }
 
 interface AuthContextType {
   user: User | null
   isLoading: boolean
   isAuthenticated: boolean
-  signIn: (email: string, password: string) => Promise<void>
+  authError: string | null
+  signInWithGoogle: () => void
   signOut: () => Promise<void>
-  refreshSession: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -31,6 +29,13 @@ export function useAuth() {
   return context
 }
 
+const ERROR_MESSAGES: Record<string, string> = {
+  unauthorized_domain: "Access restricted to @hypertalent.ai accounts",
+  invalid_state: "Login session expired. Please try again.",
+  authentication_failed: "Authentication failed. Please try again.",
+  access_denied: "Access was denied. Please try again.",
+}
+
 interface AuthProviderProps {
   children: React.ReactNode
 }
@@ -38,87 +43,64 @@ interface AuthProviderProps {
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
-
-  // Mock user for development
-  const mockUser: User = {
-    id: "user-1",
-    email: "sarah@hypertalent.com",
-    name: "Sarah M.",
-    role: "talent_manager",
-    avatar: undefined,
-  }
+  const [authError, setAuthError] = useState<string | null>(null)
 
   useEffect(() => {
-    // Simulate checking for existing session
-    const checkSession = async () => {
+    const init = async () => {
       try {
-        // In real implementation, this would check AWS Cognito session
-        const savedUser = localStorage.getItem("hyper-talent-user")
-        if (savedUser) {
-          setUser(JSON.parse(savedUser))
-        } else {
-          // Auto-login for demo purposes
-          setUser(mockUser)
-          localStorage.setItem("hyper-talent-user", JSON.stringify(mockUser))
+        // Check URL for callback params
+        const params = new URLSearchParams(window.location.search)
+        const sessionId = params.get("session_id")
+        const error = params.get("auth_error")
+
+        // Clean URL
+        if (sessionId || error) {
+          window.history.replaceState({}, "", window.location.pathname)
         }
-      } catch (error) {
-        console.error("Session check failed:", error)
+
+        if (error) {
+          setAuthError(ERROR_MESSAGES[error] || `Login failed: ${error}`)
+          setIsLoading(false)
+          return
+        }
+
+        if (sessionId) {
+          apiClient.setSessionId(sessionId)
+        }
+
+        // Validate existing session
+        if (apiClient.getSessionId()) {
+          try {
+            const me = await apiClient.getMe()
+            setUser(me)
+          } catch {
+            // Session invalid, clear it
+            apiClient.setSessionId(null)
+          }
+        }
+      } catch (err) {
+        console.error("Auth init failed:", err)
       } finally {
         setIsLoading(false)
       }
     }
 
-    checkSession()
+    init()
   }, [])
 
-  const signIn = async (email: string, password: string) => {
-    setIsLoading(true)
-    try {
-      // Simulate AWS Cognito sign in
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-
-      // Mock authentication - in real app, this would call Cognito
-      if (email && password) {
-        const authenticatedUser = { ...mockUser, email }
-        setUser(authenticatedUser)
-        localStorage.setItem("hyper-talent-user", JSON.stringify(authenticatedUser))
-      } else {
-        throw new Error("Invalid credentials")
-      }
-    } catch (error) {
-      console.error("Sign in failed:", error)
-      throw error
-    } finally {
-      setIsLoading(false)
-    }
+  const signInWithGoogle = () => {
+    window.location.href = apiClient.getLoginUrl()
   }
 
   const signOut = async () => {
     setIsLoading(true)
     try {
-      // Simulate AWS Cognito sign out
-      await new Promise((resolve) => setTimeout(resolve, 500))
-
+      await apiClient.logout()
       setUser(null)
-      localStorage.removeItem("hyper-talent-user")
-      localStorage.removeItem("hyper-talent-files")
-    } catch (error) {
-      console.error("Sign out failed:", error)
+    } catch (err) {
+      console.error("Sign out failed:", err)
     } finally {
       setIsLoading(false)
-    }
-  }
-
-  const refreshSession = async () => {
-    try {
-      // In real implementation, this would refresh AWS Cognito tokens
-      const savedUser = localStorage.getItem("hyper-talent-user")
-      if (savedUser) {
-        setUser(JSON.parse(savedUser))
-      }
-    } catch (error) {
-      console.error("Session refresh failed:", error)
-      setUser(null)
     }
   }
 
@@ -126,9 +108,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     user,
     isLoading,
     isAuthenticated: !!user,
-    signIn,
+    authError,
+    signInWithGoogle,
     signOut,
-    refreshSession,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
