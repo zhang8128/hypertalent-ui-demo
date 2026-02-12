@@ -1,5 +1,7 @@
 export interface Deal {
   id: string
+  dealId?: string  // DynamoDB deal_id for persistence
+  talentId?: string  // Associated talent for API calls
   brand: string
   title: string
   category: string
@@ -13,6 +15,7 @@ export interface Deal {
   reach?: string
   conversions?: string
   industry?: string
+  website?: string
   companySize?: string
   duration?: string
   startDate?: string
@@ -20,6 +23,16 @@ export interface Deal {
     name?: string
     email?: string
     department?: string
+  }
+  // Apollo contact enrichment
+  apolloContact?: {
+    id: string
+    name: string
+    title?: string
+    email?: string
+    phone?: string
+    linkedin_url?: string
+    confidence_score: number
   }
   linkedStepId?: string
   status?: "new" | "contacted" | "negotiating" | "closed" | "rejected"
