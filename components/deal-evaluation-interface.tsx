@@ -507,9 +507,9 @@ export function DealEvaluationInterface({
                           <User className="w-3 h-3 text-green-500" />
                           <span className="font-medium">{deal.apolloContact.name}</span>
                         </div>
-                        {deal.apolloContact.confidence_score > 0 && (
+                        {Number(deal.apolloContact.confidence_score) > 0 && (
                           <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-green-500/10 text-green-500 border-green-500/30">
-                            Score: {deal.apolloContact.confidence_score.toFixed(0)}
+                            Score: {Number(deal.apolloContact.confidence_score).toFixed(0)}
                           </Badge>
                         )}
                       </div>

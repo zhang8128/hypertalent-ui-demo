@@ -1,6 +1,6 @@
 "use client"
 import { FileText, CheckCircle, History, Loader2, FolderOpen, Trash2 } from "lucide-react"
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 
 import { apiClient, type TrackedDeal } from '@/services/api-client'
 import { FileUploadZone } from "./file-upload-zone"
@@ -54,7 +54,9 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
   const [filteredDeals, setFilteredDeals] = useState<Deal[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [isDiscovering, setIsDiscovering] = useState(false)
+  const isDiscoveringRef = useRef(false)
   const [showDiscoveryEngine, setShowDiscoveryEngine] = useState(false)
+  const [discoveryKey, setDiscoveryKey] = useState(0)
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null)
   const [showDetailsModal, setShowDetailsModal] = useState(false)
   const [showOutreachModal, setShowOutreachModal] = useState(false)
@@ -158,7 +160,10 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
           recommendedApproach: deal.recommended_approach,
         }))
         setDeals(loadedDeals)
-        setShowDiscoveryEngine(false)
+        // Only hide discovery engine if we're not actively discovering
+        if (!isDiscoveringRef.current) {
+          setShowDiscoveryEngine(false)
+        }
       }
     } catch (error) {
       console.error('Failed to load persisted deals:', error)
@@ -328,7 +333,10 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
       })
       setDeals(loadedDeals)
       setSelectedSavedFile(filename)
-      setShowDiscoveryEngine(false) // Hide discovery engine when loading saved deals
+      // Only hide discovery engine if we're not actively discovering
+      if (!isDiscoveringRef.current) {
+        setShowDiscoveryEngine(false)
+      }
     } catch (error) {
       console.error('Failed to load deal file:', error)
     }
@@ -359,7 +367,9 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
     }
 
     setIsProcessing(true)
+    setDiscoveryKey(k => k + 1) // Force remount
     setShowDiscoveryEngine(true)
+    isDiscoveringRef.current = true
     setIsDiscovering(true)
   }
 
@@ -371,6 +381,7 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
   const handleDiscoveryComplete = useCallback(async (discoveredDeals: Deal[]) => {
     // Don't setDeals here — state is already populated incrementally via handleDealFound.
     // discoveredDeals is the final list used only for persistence below.
+    isDiscoveringRef.current = false
     setIsDiscovering(false)
     setIsProcessing(false)
 
@@ -436,8 +447,9 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
           recommended_approach: (deal as any).recommendedApproach || '',
         }))
       )
-      // Reload saved deal files to show the new one
-      await loadSavedDealFiles(selectedTalent.id)
+      // Reload the saved files list (but don't auto-load — we already have deals in state)
+      const data = await apiClient.getSavedDealFiles(selectedTalent.id)
+      setSavedDealFiles(data.deal_files || [])
       setSelectedSavedFile(result.filename)
     } catch (error) {
       console.error('Failed to save deals to S3:', error)
@@ -445,6 +457,7 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
   }, [selectedTalent, discoveryPrompt])
 
   const handleSessionComplete = (_session: any) => {
+    isDiscoveringRef.current = false
     setIsDiscovering(false)
   }
 
@@ -461,7 +474,9 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
     }
     setSelectedSavedFile(null) // Clear selected saved file when starting new discovery
     setDeals([]) // Clear current deals
+    setDiscoveryKey(k => k + 1) // Force remount of discovery engine (resets hasStartedRef)
     setShowDiscoveryEngine(true)
+    isDiscoveringRef.current = true
     setIsDiscovering(true)
   }
 
@@ -630,6 +645,7 @@ export function ResultsPanel({ activeTool, sharedFiles = [], onSharedFilesChange
             {showDiscoveryEngine && selectedTalent && (
               <div className="mx-10">
                 <AIDealDiscoveryEngine
+                  key={discoveryKey}
                   selectedTalent={selectedTalent}
                   query={discoveryPrompt}
                   searchDurationMinutes={searchDurationMinutes}

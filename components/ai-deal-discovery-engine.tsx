@@ -229,6 +229,7 @@ const AIDiscoveryEngine = ({
     return () => {
       clearInterval(timerRef.current)
       abortControllerRef.current?.abort()
+      hasStartedRef.current = false // Allow restart after Strict Mode remount
     }
   }, [])
 

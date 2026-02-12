@@ -41,6 +41,7 @@ import {
   ExternalLink,
   Pencil,
   Save,
+  FileText,
 } from "lucide-react"
 import { useState, useCallback, useRef, useEffect } from "react"
 import type { TalentProfile, UploadedFile, TalentDocument } from "@/types/talent"
