@@ -9,29 +9,16 @@ import {
   Upload,
   X,
   RefreshCw,
-  FileText,
-  ImageIcon,
-  Video,
-  FileSpreadsheet,
   AlertCircle,
   CheckCircle,
 } from "lucide-react"
 import { useState, useCallback, useRef } from "react"
+import { apiClient } from "@/services/api-client"
+import type { UploadedFile } from "@/types/talent"
+import { ACCEPTED_TYPES, MAX_FILE_SIZE } from "@/lib/upload-constants"
+import { uploadFileToS3, formatFileSize, getFileIcon } from "@/lib/s3-upload"
 
-export interface UploadedFile {
-  id: string
-  name: string
-  size: number
-  type: string
-  status: "uploading" | "completed" | "error" | "processing"
-  progress: number
-  url?: string
-  error?: string
-  talentId?: string
-  fileKey?: string
-}
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qaqyqok7j0.execute-api.us-east-1.amazonaws.com'
+export type { UploadedFile }
 
 interface FileUploadZoneProps {
   files: UploadedFile[]
@@ -41,20 +28,6 @@ interface FileUploadZoneProps {
   acceptedTypes?: string[]
   talentId?: string
 }
-
-const ACCEPTED_TYPES = {
-  "application/pdf": [".pdf"],
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
-  "application/vnd.ms-excel": [".xls"],
-  "application/msword": [".doc"],
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
-  "text/plain": [".txt"],
-  "text/csv": [".csv"],
-  "image/*": [".jpg", ".jpeg", ".png", ".gif", ".webp"],
-  "video/*": [".mp4", ".mov", ".avi", ".mkv"],
-}
-
-const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB
 
 export function FileUploadZone({
   files,
@@ -66,22 +39,6 @@ export function FileUploadZone({
 }: FileUploadZoneProps) {
   const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-
-  const getFileIcon = (type: string) => {
-    if (type.includes("pdf")) return <FileText className="w-4 h-4" />
-    if (type.includes("sheet") || type.includes("excel")) return <FileSpreadsheet className="w-4 h-4" />
-    if (type.includes("image")) return <ImageIcon className="w-4 h-4" />
-    if (type.includes("video")) return <Video className="w-4 h-4" />
-    return <FileText className="w-4 h-4" />
-  }
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return "0 Bytes"
-    const k = 1024
-    const sizes = ["Bytes", "KB", "MB", "GB"]
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
-  }
 
   const validateFile = (file: File): string | null => {
     if (file.size > maxFileSize) {
@@ -104,68 +61,34 @@ export function FileUploadZone({
 
   const uploadToS3 = async (file: UploadedFile, originalFile: File): Promise<void> => {
     try {
-      // 1. Get presigned URL from backend
-      const presignedResponse = await fetch(`${API_URL}/api/uploads/presigned-url`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: file.name,
-          content_type: file.type || 'application/octet-stream',
-          talent_id: talentId
-        })
-      })
+      const presignedData = await apiClient.getPresignedUploadUrl(
+        file.name,
+        file.type || 'application/octet-stream',
+        talentId
+      )
 
-      if (!presignedResponse.ok) {
-        throw new Error('Failed to get upload URL')
-      }
-
-      const presignedData = await presignedResponse.json()
-
-      // 2. Upload file directly to S3 using presigned POST
-      const formData = new FormData()
-      Object.entries(presignedData.fields).forEach(([key, value]) => {
-        formData.append(key, value as string)
-      })
-      formData.append('file', originalFile)
-
-      // Track upload progress using XMLHttpRequest
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest()
-
-        xhr.upload.addEventListener('progress', (event) => {
-          if (event.lengthComputable) {
-            const progress = (event.loaded / event.total) * 100
-            onFilesChange(files.map((f) => (f.id === file.id ? { ...f, progress } : f)))
-          }
-        })
-
-        xhr.addEventListener('load', () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            onFilesChange(
-              files.map((f) =>
-                f.id === file.id
-                  ? {
-                      ...f,
-                      status: "completed" as const,
-                      progress: 100,
-                      url: presignedData.public_url,
-                      fileKey: presignedData.file_key
-                    }
-                  : f,
-              ),
-            )
-            resolve()
-          } else {
-            reject(new Error(`Upload failed with status ${xhr.status}`))
-          }
-        })
-
-        xhr.addEventListener('error', () => {
-          reject(new Error('Upload failed'))
-        })
-
-        xhr.open('POST', presignedData.upload_url)
-        xhr.send(formData)
+      uploadFileToS3(presignedData, originalFile, {
+        onProgress: (progress) => {
+          onFilesChange(files.map((f) => (f.id === file.id ? { ...f, progress } : f)))
+        },
+        onSuccess: (data) => {
+          onFilesChange(
+            files.map((f) =>
+              f.id === file.id
+                ? { ...f, status: "completed" as const, progress: 100, url: data.public_url, fileKey: data.file_key }
+                : f,
+            ),
+          )
+        },
+        onError: (error) => {
+          onFilesChange(
+            files.map((f) =>
+              f.id === file.id
+                ? { ...f, status: "error" as const, error: error.message }
+                : f,
+            ),
+          )
+        },
       })
     } catch (error) {
       onFilesChange(
@@ -175,7 +98,6 @@ export function FileUploadZone({
             : f,
         ),
       )
-      throw error
     }
   }
 
@@ -266,11 +188,7 @@ export function FileUploadZone({
       // If file was uploaded to S3, delete it from S3
       if (file?.fileKey && file.status === "completed") {
         try {
-          await fetch(`${API_URL}/api/uploads/files`, {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ file_key: file.fileKey })
-          })
+          await apiClient.deleteUploadedFile(file.fileKey)
         } catch (error) {
           console.error('Failed to delete file from S3:', error)
         }
