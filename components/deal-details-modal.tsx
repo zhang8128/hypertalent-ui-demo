@@ -146,6 +146,69 @@ export function DealDetailsModal({ deal, isOpen, onClose, onGenerateOutreach, in
               </div>
             </div>
 
+            {/* Campaign Details */}
+            {deal.campaignDetails && (
+              <div>
+                <h4 className="font-medium mb-2 flex items-center gap-2">
+                  <Target className="w-4 h-4" />
+                  Campaign Details
+                </h4>
+                <div className="bg-secondary/50 p-4 rounded-lg space-y-3">
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    {deal.campaignDetails.compensationType && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Compensation:</span>
+                        <span className="font-medium capitalize">{deal.campaignDetails.compensationType}</span>
+                      </div>
+                    )}
+                    {deal.campaignDetails.platformFocus && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Platform:</span>
+                        <span className="font-medium">{deal.campaignDetails.platformFocus}</span>
+                      </div>
+                    )}
+                    {deal.campaignDetails.deadline && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Deadline:</span>
+                        <span className="font-medium">{deal.campaignDetails.deadline}</span>
+                      </div>
+                    )}
+                    {deal.campaignDetails.urgency && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Urgency:</span>
+                        <span className={`font-medium ${deal.campaignDetails.urgency === "high" ? "text-red-500" : ""}`}>
+                          {deal.campaignDetails.urgency.charAt(0).toUpperCase() + deal.campaignDetails.urgency.slice(1)}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  {deal.campaignDetails.requirements && deal.campaignDetails.requirements.length > 0 && (
+                    <div>
+                      <span className="text-sm text-muted-foreground">Requirements:</span>
+                      <div className="flex flex-wrap gap-1.5 mt-1">
+                        {deal.campaignDetails.requirements.map((req, idx) => (
+                          <Badge key={idx} variant="secondary" className="text-xs">
+                            {req}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {deal.sourceUrl && (
+                    <a
+                      href={deal.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline mt-1"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      View on {deal.source ? deal.source.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "source"}
+                    </a>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Requirements */}
             {deal.requirements && deal.requirements.length > 0 && (
               <div>
@@ -188,6 +251,7 @@ export function DealDetailsModal({ deal, isOpen, onClose, onGenerateOutreach, in
             )}
 
             {/* Tags */}
+            {deal.tags && deal.tags.length > 0 && (
             <div>
               <h4 className="font-medium mb-2">Tags</h4>
               <div className="flex flex-wrap gap-2">
@@ -198,6 +262,7 @@ export function DealDetailsModal({ deal, isOpen, onClose, onGenerateOutreach, in
                 ))}
               </div>
             </div>
+            )}
 
             {/* Contact Information */}
             {deal.contact && (
@@ -238,9 +303,9 @@ export function DealDetailsModal({ deal, isOpen, onClose, onGenerateOutreach, in
                         <p className="text-sm text-muted-foreground">{deal.apolloContact.title}</p>
                       )}
                       <p className="text-sm text-muted-foreground">{deal.brand}</p>
-                      {deal.apolloContact.confidence_score > 0 && (
+                      {Number(deal.apolloContact.confidence_score) > 0 && (
                         <Badge variant="outline" className="mt-1 bg-green-500/10 text-green-500 border-green-500/30">
-                          Confidence: {deal.apolloContact.confidence_score.toFixed(0)}%
+                          Confidence: {Number(deal.apolloContact.confidence_score).toFixed(0)}%
                         </Badge>
                       )}
                     </div>
