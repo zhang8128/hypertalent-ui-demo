@@ -55,10 +55,22 @@ interface EvaluationFilters {
   minScore: number
   maxScore: number
   status: string
+  source: string
   deadline: string
   sortBy: "score" | "value" | "brand" | "deadline" | "engagement"
   sortOrder: "asc" | "desc"
   tags: string[]
+}
+
+const SOURCE_COLORS: Record<string, string> = {
+  web_search: "bg-blue-100 text-blue-700",
+  collabstr: "bg-purple-100 text-purple-700",
+  aspire: "bg-green-100 text-green-700",
+  linkedin: "bg-sky-100 text-sky-700",
+  instagram: "bg-pink-100 text-pink-700",
+  tiktok: "bg-gray-100 text-gray-700",
+  meeting_notes: "bg-amber-100 text-amber-700",
+  static_database: "bg-slate-100 text-slate-600",
 }
 
 interface DealAnalytics {
@@ -91,6 +103,7 @@ export function DealEvaluationInterface({
     minScore: 0,
     maxScore: 10,
     status: "any", // Updated default value to "any"
+    source: "any",
     deadline: "",
     sortBy: "score",
     sortOrder: "desc",
@@ -182,6 +195,10 @@ export function DealEvaluationInterface({
       filtered = filtered.filter((deal) => deal.status === filters.status)
     }
 
+    if (filters.source !== "any") {
+      filtered = filtered.filter((deal) => deal.source === filters.source)
+    }
+
     filtered = filtered.filter((deal) => deal.matchScore >= filters.minScore && deal.matchScore <= filters.maxScore)
 
     if (filters.tags.length > 0) {
@@ -240,6 +257,7 @@ export function DealEvaluationInterface({
       minScore: 0,
       maxScore: 10,
       status: "any", // Updated default value to "any"
+      source: "any",
       deadline: "",
       sortBy: "score",
       sortOrder: "desc",
@@ -306,6 +324,9 @@ export function DealEvaluationInterface({
 
   const availableCategories = Array.from(new Set(deals.map((deal) => deal.category)))
   const availableTags = Array.from(new Set(deals.flatMap((deal) => deal.tags)))
+  const availableSources = useMemo(() => Array.from(new Set(deals.map((deal) => deal.source).filter(Boolean) as string[])), [deals])
+
+  const formatSourceLabel = (source: string) => source.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
 
   return (
     <div className="space-y-6">
@@ -388,9 +409,26 @@ export function DealEvaluationInterface({
                 </SelectContent>
               </Select>
 
+              {availableSources.length > 0 && (
+                <Select value={filters.source} onValueChange={(value) => updateFilter("source", value)}>
+                  <SelectTrigger className="w-40">
+                    <SelectValue placeholder="Source" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="any">All Sources</SelectItem>
+                    {availableSources.map((source) => (
+                      <SelectItem key={source} value={source}>
+                        {formatSourceLabel(source)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+
               {(filters.search ||
                 filters.category !== "all" ||
                 filters.valueRange !== "any" ||
+                filters.source !== "any" ||
                 filters.minScore > 0) && (
                 <Button variant="ghost" size="sm" onClick={clearFilters}>
                   Clear Filters
@@ -409,6 +447,11 @@ export function DealEvaluationInterface({
                     <div className="flex-1">
                       <h4 className="font-semibold text-sm">{deal.brand}</h4>
                       <p className="text-xs text-muted-foreground">{deal.title}</p>
+                      {deal.source && (
+                        <span className={`inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${SOURCE_COLORS[deal.source] || "bg-gray-100 text-gray-600"}`}>
+                          {formatSourceLabel(deal.source)}
+                        </span>
+                      )}
                     </div>
                     {/* Status Badge/Dropdown */}
                     {onStatusChange ? (
@@ -445,22 +488,22 @@ export function DealEvaluationInterface({
                   <div className="grid grid-cols-3 gap-2 text-xs">
                     <div className="flex items-center gap-1">
                       <DollarSign className="w-3 h-3 text-foreground" />
-                      <span style={{ color: "#AE94FB" }} className="font-semibold text-sm">
+                      <span className="font-semibold text-sm text-[#AE94FB]">
                         {deal.valueRange}
                       </span>
                     </div>
                     <div className="flex items-center gap-1">
                       <Target className="w-3 h-3 text-green-500" />
-                      <span style={{ color: "#AE94FB" }} className="font-semibold text-sm">
+                      <span className="font-semibold text-sm text-[#AE94FB]">
                         {deal.matchScore.toFixed(1)}
                       </span>
                       <span className="text-muted-foreground">/10</span>
                     </div>
-                    {(deal as any).priority && (
+                    {deal.priority && (
                       <div className="flex items-center gap-1">
                         <TrendingUp className="w-3 h-3 text-blue-500" />
                         <span className="font-medium text-sm text-muted-foreground">
-                          {(deal as any).priority}
+                          {deal.priority}
                         </span>
                       </div>
                     )}
