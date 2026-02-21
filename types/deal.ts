@@ -34,10 +34,25 @@ export interface Deal {
     linkedin_url?: string
     confidence_score: number
   }
+  estimatedValue?: number | string
+  successProbability?: number
+  priority?: string
+  recommendedApproach?: string
   linkedStepId?: string
   status?: "new" | "contacted" | "negotiating" | "closed" | "rejected"
   createdAt: string
   updatedAt: string
+  // Deal Hunter source fields
+  source?: string           // "web_search" | "collabstr" | "aspire" | "linkedin" | "meeting_notes" | etc.
+  sourceUrl?: string        // Direct link to campaign listing
+  campaignDetails?: {
+    deadline?: string
+    requirements?: string[]
+    compensationType?: "paid" | "gifted" | "affiliate" | "hybrid" | "unknown"
+    platformFocus?: string
+    followUp?: string
+    urgency?: "high" | "medium" | "low"
+  }
   crmData?: {
     accountManager: string
     lastContact?: string

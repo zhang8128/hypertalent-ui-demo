@@ -58,6 +58,16 @@ function convertStreamedDeal(deal: Record<string, unknown>): Deal {
     successProbability: deal.success_probability as number,
     priority: deal.priority as string,
     recommendedApproach: deal.recommended_approach as string,
+    source: deal.source as string,
+    sourceUrl: deal.source_url as string,
+    campaignDetails: deal.campaign_details ? {
+      deadline: (deal.campaign_details as any)?.deadline,
+      requirements: (deal.campaign_details as any)?.requirements,
+      compensationType: (deal.campaign_details as any)?.compensation_type,
+      platformFocus: (deal.campaign_details as any)?.platform_focus,
+      followUp: (deal.campaign_details as any)?.follow_up,
+      urgency: (deal.campaign_details as any)?.urgency,
+    } : undefined,
   }
 }
 
@@ -203,7 +213,6 @@ const AIDiscoveryEngine = ({
             setIsSearching(false)
             setHasError(true)
             setStatusMessage(`Error: ${error.message}`)
-            console.error("Discovery stream error:", error)
           },
         },
         controller.signal
@@ -215,7 +224,6 @@ const AIDiscoveryEngine = ({
       setIsSearching(false)
       setHasError(true)
       setStatusMessage(`Error: ${error instanceof Error ? error.message : "Unknown error"}`)
-      console.error("Discovery session error:", error)
     }
   }, [selectedTalent, query, searchDurationMinutes, entityType, onDealFound, onDealsFound, onSessionComplete])
 
