@@ -92,7 +92,6 @@ export function TalentProfileModal({
       const data = await apiClient.getTalentDocs(talent.id)
       setDocuments(data.documents || [])
     } catch (error) {
-      console.error('Failed to load documents:', error)
     } finally {
       setIsLoadingDocs(false)
     }
@@ -104,7 +103,6 @@ export function TalentProfileModal({
       const data = await apiClient.getTalent(talent.id)
       setFullProfile(data)
     } catch (error) {
-      console.error('Failed to load full profile:', error)
     }
   }
 
@@ -149,7 +147,6 @@ export function TalentProfileModal({
         ...updated,
       })
     } catch (error) {
-      console.error("Failed to save talent:", error)
     } finally {
       setIsSaving(false)
     }
@@ -255,7 +252,7 @@ export function TalentProfileModal({
       for (const uploadFile of newFiles.filter((f) => !f.error)) {
         const originalFile = originalFilesRef.current.get(uploadFile.id)
         if (originalFile) {
-          uploadToS3(uploadFile, originalFile).catch(console.error)
+          uploadToS3(uploadFile, originalFile).catch(() => {})
         }
       }
     },
@@ -304,7 +301,6 @@ export function TalentProfileModal({
       await apiClient.deleteTalentDoc(talent.id, doc.fileKey)
       setDocuments(prev => prev.filter(d => d.id !== doc.id))
     } catch (error) {
-      console.error('Failed to delete document:', error)
     }
   }
 
@@ -316,7 +312,6 @@ export function TalentProfileModal({
       onClose()
       onTalentDeleted()
     } catch (error) {
-      console.error('Failed to delete talent:', error)
     } finally {
       setIsDeleting(false)
     }
@@ -350,7 +345,11 @@ export function TalentProfileModal({
                     </Button>
                   )}
                 </div>
-                <Badge variant="outline" className="mt-1">{isEditing ? editData.category : talent.category}</Badge>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {(isEditing ? editData.category : talent.category)?.split(", ").filter(Boolean).map((cat: string) => (
+                    <Badge key={cat} variant="outline">{cat}</Badge>
+                  ))}
+                </div>
               </div>
             </div>
           </DialogHeader>
@@ -378,10 +377,27 @@ export function TalentProfileModal({
                       </div>
                       <div>
                         <label className="text-sm font-medium mb-1 block">Category</label>
-                        <Input
-                          value={editData.category}
-                          onChange={(e) => updateField("category", e.target.value)}
-                        />
+                        <div className="flex flex-wrap gap-1.5 mt-1">
+                          {["Professional Athlete", "Model", "Entertainer", "Lifestyle Influencer", "Gaming Creator", "Fashion Influencer", "Tech Reviewer", "Fitness Influencer", "Creator"].map((cat) => {
+                            const selected = (editData.category || "").split(", ").filter(Boolean).includes(cat)
+                            return (
+                              <Badge
+                                key={cat}
+                                variant={selected ? "default" : "outline"}
+                                className={`cursor-pointer text-xs ${selected ? "" : "hover:bg-muted"}`}
+                                onClick={() => {
+                                  const current = (editData.category || "").split(", ").filter(Boolean)
+                                  const updated = selected
+                                    ? current.filter((c: string) => c !== cat)
+                                    : [...current, cat]
+                                  updateField("category", updated.join(", "))
+                                }}
+                              >
+                                {cat}
+                              </Badge>
+                            )
+                          })}
+                        </div>
                       </div>
                     </div>
 

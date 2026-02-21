@@ -102,7 +102,6 @@ export function TalentProfileManager({ selectedTalent, onTalentChange, entityFil
       const data = await apiClient.getTalents()
       setTalents(data.talents || [])
     } catch (error) {
-      console.error('Failed to load talents:', error)
     } finally {
       setIsLoading(false)
     }
@@ -113,7 +112,6 @@ export function TalentProfileManager({ selectedTalent, onTalentChange, entityFil
       const data = await apiClient.getTalentDocs(talentId)
       setDocuments(data.documents || [])
     } catch (error) {
-      console.error('Failed to load documents:', error)
     }
   }
 
@@ -169,7 +167,6 @@ export function TalentProfileManager({ selectedTalent, onTalentChange, entityFil
         website: "",
       })
     } catch (error) {
-      console.error('Failed to create talent:', error)
     } finally {
       setIsCreating(false)
     }
@@ -187,7 +184,6 @@ export function TalentProfileManager({ selectedTalent, onTalentChange, entityFil
         onTalentChange(undefined as any)
       }
     } catch (error) {
-      console.error('Failed to delete talent:', error)
     }
   }
 
@@ -285,7 +281,6 @@ export function TalentProfileManager({ selectedTalent, onTalentChange, entityFil
       await apiClient.deleteTalentDoc(selectedTalent.id, doc.fileKey)
       setDocuments(prev => prev.filter(d => d.id !== doc.id))
     } catch (error) {
-      console.error('Failed to delete document:', error)
     }
   }
 
@@ -332,40 +327,50 @@ export function TalentProfileManager({ selectedTalent, onTalentChange, entityFil
                     </div>
                     <div>
                       <Label htmlFor="category">{isCompany ? "Industry" : "Category"}</Label>
-                      <Select
-                        value={newTalentForm.category}
-                        onValueChange={(value) => setNewTalentForm((prev) => ({ ...prev, category: value }))}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder={isCompany ? "Select industry" : "Select category"} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {isCompany ? (
-                            <>
-                              <SelectItem value="Technology">Technology</SelectItem>
-                              <SelectItem value="SaaS">SaaS</SelectItem>
-                              <SelectItem value="E-commerce">E-commerce</SelectItem>
-                              <SelectItem value="Finance">Finance</SelectItem>
-                              <SelectItem value="Healthcare">Healthcare</SelectItem>
-                              <SelectItem value="Manufacturing">Manufacturing</SelectItem>
-                              <SelectItem value="Retail">Retail</SelectItem>
-                              <SelectItem value="Media & Entertainment">Media & Entertainment</SelectItem>
-                              <SelectItem value="Professional Services">Professional Services</SelectItem>
-                              <SelectItem value="Other">Other</SelectItem>
-                            </>
-                          ) : (
-                            <>
-                              <SelectItem value="Professional Athlete">Professional Athlete</SelectItem>
-                              <SelectItem value="Lifestyle Influencer">Lifestyle Influencer</SelectItem>
-                              <SelectItem value="Gaming Creator">Gaming Creator</SelectItem>
-                              <SelectItem value="Fashion Influencer">Fashion Influencer</SelectItem>
-                              <SelectItem value="Tech Reviewer">Tech Reviewer</SelectItem>
-                              <SelectItem value="Fitness Influencer">Fitness Influencer</SelectItem>
-                              <SelectItem value="Creator">Creator</SelectItem>
-                            </>
-                          )}
-                        </SelectContent>
-                      </Select>
+                      {isCompany ? (
+                        <Select
+                          value={newTalentForm.category}
+                          onValueChange={(value) => setNewTalentForm((prev) => ({ ...prev, category: value }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select industry" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Technology">Technology</SelectItem>
+                            <SelectItem value="SaaS">SaaS</SelectItem>
+                            <SelectItem value="E-commerce">E-commerce</SelectItem>
+                            <SelectItem value="Finance">Finance</SelectItem>
+                            <SelectItem value="Healthcare">Healthcare</SelectItem>
+                            <SelectItem value="Manufacturing">Manufacturing</SelectItem>
+                            <SelectItem value="Retail">Retail</SelectItem>
+                            <SelectItem value="Media & Entertainment">Media & Entertainment</SelectItem>
+                            <SelectItem value="Professional Services">Professional Services</SelectItem>
+                            <SelectItem value="Other">Other</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <div className="flex flex-wrap gap-1.5 mt-1.5">
+                          {["Professional Athlete", "Model", "Entertainer", "Lifestyle Influencer", "Gaming Creator", "Fashion Influencer", "Tech Reviewer", "Fitness Influencer", "Creator"].map((cat) => {
+                            const selected = newTalentForm.category.split(", ").filter(Boolean).includes(cat)
+                            return (
+                              <Badge
+                                key={cat}
+                                variant={selected ? "default" : "outline"}
+                                className={`cursor-pointer text-xs ${selected ? "" : "hover:bg-muted"}`}
+                                onClick={() => {
+                                  const current = newTalentForm.category.split(", ").filter(Boolean)
+                                  const updated = selected
+                                    ? current.filter((c) => c !== cat)
+                                    : [...current, cat]
+                                  setNewTalentForm((prev) => ({ ...prev, category: updated.join(", ") }))
+                                }}
+                              >
+                                {cat}
+                              </Badge>
+                            )
+                          })}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div>
